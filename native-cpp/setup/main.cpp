@@ -1102,6 +1102,10 @@ int wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
             g_purge = true;
         } else if (flag == L"--dir" && i + 1 < argc) {
             g_dir_override = fs::path(argv[++i]);
+        } else if (flag == L"--base-dir" && i + 1 < argc) {
+            // 和界面上选目录一个语义：装到 <base-dir>\p2p-share
+            g_install_base = fs::path(argv[++i]);
+            g_dir_override.clear();
         } else if (flag == L"--desktop") {
             g_desktop = true;
         } else if (flag == L"--no-desktop") {
