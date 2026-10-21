@@ -1,0 +1,10 @@
+build-win/
+build-android/
+*.exe
+*.obj
+*.pdb
+*.ilk
+*.lib
+test_*.cpp
+test_*.obj
+test_*.exe
