@@ -1656,7 +1656,9 @@ LRESULT CALLBACK msg_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
         }
         case kPairShow: {
             // 输码方只是核对，不阻塞；页面收到 pair-show 后自己画卡片。
-            show_popup();
+            // 小窗还没建好（自启动/--join 抢先）时先记下来，等 WebView 就绪再弹。
+            if (!g_popup || !g_controller) g_want_popup = true;
+            else show_popup();
             return 0;
         }
         case kPairAskTimeout: {
