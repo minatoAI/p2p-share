@@ -11,7 +11,7 @@
 
 ```text
 peer.cpp            核心：WebSocket 信令 + PeerConnection + DataChannel + 吞吐统计
-win_main.cpp        Windows 入口（编译成 bench_peer.exe）
+                    （Windows 的 main 也在里面，非 Android 编译时启用）
 jni_bridge.cpp      Android JNI 入口（编译成 libjni_bench.so）
 android/Bench.java  app_process 驱动，调用 native start()
 relay.js            最小 WebSocket 信令中继（两个客户端互转）
