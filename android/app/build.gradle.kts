@@ -12,8 +12,8 @@ android {
         applicationId = "dev.p2pshare.app"
         minSdk = 26
         targetSdk = 37
-        versionCode = 8
-        versionName = "0.4.4"
+        versionCode = 9
+        versionName = "0.4.5"
 
         // 先只打 arm64，APK 体积能少一半多；模拟器联调时再加 x86_64
         ndk {
