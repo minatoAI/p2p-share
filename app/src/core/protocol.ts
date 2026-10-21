@@ -238,6 +238,8 @@ export type ControlMessage =
   | { t: 'meta'; id: string; name: string; size: number; mime: string }
   | { t: 'done'; id: string; size: number }
   | { t: 'ack'; id: string; received: number }
+  /** 文字没有分片可确认，收到后单独回一条；发送端据此判断"对方收到了" */
+  | { t: 'text-ack'; id: string }
   | { t: 'text'; id: string; text: string }
   | { t: 'error'; id?: string; message: string }
   /**

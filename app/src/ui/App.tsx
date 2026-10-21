@@ -327,9 +327,17 @@ export default function App() {
 
   const applyUpdate = useCallback(async (u: TransferUpdate) => {
     const tl = timelineRef.current;
-    if (!tl || !u.id || textIdsRef.current.has(u.id)) return;
+    if (!tl || !u.id) return;
     const list = await tl.list();
     const found = list.find((e) => e.id === u.id);
+    if (textIdsRef.current.has(u.id)) {
+      // 文字的送达状态也走这条更新：pending -> done / error
+      if (found) {
+        await tl.update(u.id, { ...found, status: u.status, note: u.message ?? found.note });
+        setEntries(await tl.list());
+      }
+      return;
+    }
     const next: TimelineEntry = {
       id: u.id,
       at: found?.at ?? Date.now(),
@@ -349,7 +357,13 @@ export default function App() {
   }, []);
 
   const addTextEntry = useCallback(
-    async (id: string, direction: 'in' | 'out', body: string) => {
+    async (
+      id: string,
+      direction: 'in' | 'out',
+      body: string,
+      status: 'pending' | 'done' | 'error' = 'done',
+      note?: string,
+    ) => {
       const tl = timelineRef.current;
       if (!tl) return;
       textIdsRef.current.add(id);
@@ -363,7 +377,8 @@ export default function App() {
         peerId: '',
         peerName: peerNameRef.current,
         text: body,
-        status: 'done',
+        status,
+        note,
       });
       setEntries(await tl.list());
     },
@@ -1042,10 +1057,13 @@ export default function App() {
       if (!manager || !target || !body) return false;
       try {
         const id = await manager.sendText(target, body);
-        void addTextEntry(id, 'out', body);
+        void addTextEntry(id, 'out', body, 'pending');
         return true;
       } catch (err) {
-        log(`⚠ 发送失败：${err instanceof Error ? err.message : String(err)}`);
+        const message = err instanceof Error ? err.message : String(err);
+        log(`⚠ 发送失败：${message}`);
+        // 失败也要在时间线留一条，用户才能点重试
+        void addTextEntry(`failed-${Date.now().toString(36)}`, 'out', body, 'error', message);
         return false;
       }
     },
@@ -2606,7 +2624,9 @@ export default function App() {
                 <span className="meta">
                   {e.kind === 'file' && e.size !== undefined ? `${formatBytes(e.size)} · ` : ''}
                   {e.status === 'done'
-                    ? '已完成'
+                    ? e.kind === 'text'
+                      ? '已送达'
+                      : '已完成'
                     : e.status === 'error'
                       ? `失败：${e.note ?? ''}`
                       : '进行中'}
@@ -2636,6 +2656,10 @@ export default function App() {
                   <button
                     data-testid={`retry-${e.id}`}
                     onClick={() => {
+                      if (e.kind === 'text') {
+                        void sendTextBody(e.text ?? '');
+                        return;
+                      }
                       const file = e.name ? sentFilesRef.current.get(`${e.name}:${e.size ?? 0}`) : undefined;
                       if (file) sendFiles([file]);
                       else log('这份文件已经不在了，重新选一次吧');

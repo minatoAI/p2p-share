@@ -96,6 +96,8 @@ export const DEFAULT_HIGH_WATER = 8 * 1024 * 1024;
 export const DEFAULT_LOW_WATER = 1 * 1024 * 1024;
 const DEFAULT_DRAIN_TIMEOUT = 5000;
 const DEFAULT_ACK_TIMEOUT = 30000;
+/** 文字是即时消息，8 秒没有回执就认为对方没收到，交给用户重试 */
+const TEXT_ACK_TIMEOUT = 8000;
 const DEFAULT_PROGRESS_INTERVAL = 100;
 const DEFAULT_ACK_INTERVAL = 256 * 1024;
 const DEFAULT_READ_AHEAD = 4 * 1024 * 1024;
@@ -130,6 +132,8 @@ export class TransferEngine {
   private readonly acks = new Map<string, number>();
   /** 等待收尾确认。唤醒时带一个布尔：true 是又收到一个确认，false 是别再等了。 */
   private readonly ackWaiters = new Map<string, (confirmed: boolean) => void>();
+  /** 文字的送达确认：id -> 超时定时器；收到 text-ack 或链路断开时清掉 */
+  private readonly textTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /**
    * 对端主动报回来的失败原因或取消文案，按传输 ID 存。
    * 值已经是给用户看的整句，waitForAck 直接原样抛出，不再二次加前缀。
@@ -233,8 +237,33 @@ export class TransferEngine {
   sendText(text: string): string {
     const id = this.opts.newTransferId();
     this.send({ t: 'text', id, text });
-    this.handlers.onStatus?.({ id, direction: 'out', status: 'done' });
+    this.handlers.onStatus?.({ id, direction: 'out', status: 'pending' });
+    const timer = setTimeout(() => {
+      this.textTimers.delete(id);
+      this.handlers.onStatus?.({
+        id,
+        direction: 'out',
+        status: 'error',
+        message: '对方没有确认收到，可以重发',
+      });
+    }, TEXT_ACK_TIMEOUT);
+    this.textTimers.set(id, timer);
     return id;
+  }
+
+  /** 收到 text-ack（或链路断开）时收尾；重复回执忽略。 */
+  private finishText(id: string, ok: boolean, message?: string): void {
+    const timer = this.textTimers.get(id);
+    if (timer) {
+      clearTimeout(timer);
+      this.textTimers.delete(id);
+    }
+    this.handlers.onStatus?.({
+      id,
+      direction: 'out',
+      status: ok ? 'done' : 'error',
+      message,
+    });
   }
 
   /* ---------------------------------------------------------- 发送 */
@@ -389,6 +418,11 @@ export class TransferEngine {
       case 'text':
         this.handlers.onText?.(msg.id, msg.text);
         this.handlers.onStatus?.({ id: msg.id, direction: 'in', status: 'done' });
+        // 文字没有分片可确认，收到就回一条，发送端据此判断送达
+        this.send({ t: 'text-ack', id: msg.id });
+        return;
+      case 'text-ack':
+        this.finishText(msg.id, true);
         return;
       case 'error': {
         // 对端报回来的失败原因要能打断自己这边的收尾等待：
@@ -641,6 +675,16 @@ export class TransferEngine {
     for (const [id, waiter] of this.ackWaiters) {
       this.ackWaiters.delete(id);
       waiter(false);
+    }
+    for (const [id, timer] of this.textTimers) {
+      clearTimeout(timer);
+      this.textTimers.delete(id);
+      this.handlers.onStatus?.({
+        id,
+        direction: 'out',
+        status: 'error',
+        message: reason,
+      });
     }
     for (const w of this.drainWaiters) w.resolve();
     this.drainWaiters = [];

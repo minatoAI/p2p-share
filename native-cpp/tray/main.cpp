@@ -82,6 +82,8 @@ constexpr UINT kFileReceived = WM_APP + 4;
 constexpr UINT kErrorEvent = WM_APP + 5;
 constexpr UINT kPairAsk = WM_APP + 6;
 constexpr UINT kPairAskTimeout = WM_APP + 7;
+/** 输码方也要看到六位核对码：只叫出小窗，不阻塞等按钮 */
+constexpr UINT kPairShow = WM_APP + 13;
 constexpr UINT_PTR kWatchTimer = 1;
 constexpr UINT_PTR kShotTimer = 2;
 constexpr UINT_PTR kDumpWindows = 7;
@@ -1652,6 +1654,11 @@ LRESULT CALLBACK msg_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
             show_popup();
             return 0;
         }
+        case kPairShow: {
+            // 输码方只是核对，不阻塞；页面收到 pair-show 后自己画卡片。
+            show_popup();
+            return 0;
+        }
         case kPairAskTimeout: {
             g_in_dialog = false;
             post_to_page(R"({"t":"pair-ask-timeout"})");
@@ -2303,6 +2310,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
             loaded.identity, g_settings, g_session_dir, [](const nlohmann::json& msg) {
                 log_line("[会话] " + msg.dump());
                 const std::string type = msg.value("t", "");
+                if (type == "pair-show") {
+                    // 输码方：把核对码显示出来，同时把小窗叫到前台
+                    PostMessageW(g_msg, kPairShow, 0, 0);
+                    post_to_page(msg.dump());
+                    return;
+                }
                 if (type == "text") {
                     nlohmann::json copy = msg;
                     copy["autoCopy"] = g_settings.auto_sync_clipboard;
