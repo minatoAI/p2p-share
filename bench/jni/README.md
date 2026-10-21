@@ -85,7 +85,7 @@ adb logcat -s P2PBench:I
 | 配置 | W → A | A → W |
 | --- | --- | --- |
 | 当前 App（Android libwebrtc + Windows libdatachannel） | 6.0–6.8 MB/s | 12.9 MB/s |
-| JNI libdatachannel，Android 收 16 MB / 发 1 MB，256 KB 分片 | **15.5 MB/s** | **9.8 MB/s** |
+| JNI libdatachannel，Android 收 16 MB / 发 1 MB，256 KB 分片 | **11.2–15.7 MB/s**（两次） | **9.8 MB/s** |
 | 同上，Android 发 16 MB | — | 8.2 MB/s |
 | 同上，Android 发 4 MB | — | 8.5 MB/s |
 | 同上，Android 发 1 MB + 16 KB 分片 | — | 7.3 MB/s |
@@ -93,11 +93,11 @@ adb logcat -s P2PBench:I
 
 结论：
 
-1. **接收方向是最大瓶颈**：Android 接收缓冲从默认调到 16 MB，W→A 从 6.8 提到 **15.5 MB/s（2.3 倍）**。
+1. **接收方向是最大瓶颈**：Android 接收缓冲从默认调到 16 MB，W→A 从 6.8 提到 **11.2–15.7 MB/s（约 1.6–2.3 倍，随 WiFi 波动）**。
    这直接证明“手机 WiFi 高 RTT + SCTP 接收窗口/缓冲”是当前 Windows→安卓慢的主因。
 2. **发送方向没有变好**：libdatachannel 在 Android 上发 100 MB 只有 9.8 MB/s，低于当前 libwebrtc 的 12.9。
    当前 Android libwebrtc 的发送路径已经比这个 JNI 原型好，不能为了接收优化直接把 Android 整体换掉。
-3. **调 SCTP 拥塞控制参数没有收益**：初始 cwnd 128、maxBurst、RTCC 反而让 W→A 从 15.5 掉到 10.9。
+3. **调 SCTP 拥塞控制参数没有收益**：初始 cwnd 128、maxBurst、RTCC 反而让 W→A 从较好水平掉到 10.9。
    libdatachannel 的默认 CC 在这条链路上更好。
 4. 分片 256 KB 比 16/60 KB 好；发送缓冲 1 MB 比 4/16 MB 好。
 
