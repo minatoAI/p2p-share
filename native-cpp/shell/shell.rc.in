@@ -1,0 +1,20 @@
+#include <windows.h>
+
+/* Keep this file pure ASCII. rc.exe reads it in the ANSI code page, so UTF-8
+   Chinese comments come out as mojibake and MSVC warns C4819.
+
+   The id is substituted by CMake and is the single source of truth: the same
+   number is passed to the C++ side as a compile definition. Do NOT reintroduce
+   an #include here for it. Two things went wrong when the id came from a header:
+     1. rc.exe could not find that header on its include path (CMake concatenated
+        the flag as /IE:/... and never added the shell dir to INCLUDES), and
+     2. rc.exe does NOT error on an undefined identifier. It silently uses the
+        identifier text as a STRING resource name instead of an ordinal, so the
+        resource ended up named "IDR_INDEX_HTML" while the code looked up 101.
+        FindResource then failed with 1814 and nothing said why.
+   Using a plain number here removes both failure modes.
+
+   The path must use forward slashes: backslashes are escape characters inside
+   rc.exe quoted strings, so a path containing "\native-cpp" turns into a
+   newline and rc reports the path truncated at the first backslash. */
+@SHELL_RESOURCE_ID@ RCDATA "@SHELL_PAGE_NATIVE@"

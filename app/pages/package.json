@@ -1,0 +1,10 @@
+{
+  "name": "p2p-share-web",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Pages 项目：静态页面加转发。它的存在只因为 Durable Objects 不能定义在 Pages 项目里",
+  "scripts": {
+    "deploy": "wrangler pages deploy",
+    "dev": "wrangler pages dev"
+  }
+}

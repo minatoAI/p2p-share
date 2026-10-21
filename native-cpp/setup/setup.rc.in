@@ -1,0 +1,36 @@
+// 由 CMake 生成。托盘 exe 作为 RCDATA 编进来，安装时释放到安装目录。
+// 路径用正斜杠：rc.exe 里反斜杠是转义符。
+#pragma code_page(65001)
+#include <windows.h>
+#include "@SETUP_DIR@/resource.h"
+
+IDI_SETUP ICON "@TRAY_ICON_STATIC@"
+IDR_TRAY_EXE RCDATA "@TRAY_EXE@"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION 0,1,0,0
+PRODUCTVERSION 0,1,0,0
+FILEFLAGSMASK 0x3fL
+FILEFLAGS 0x0L
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404b0"
+        BEGIN
+            VALUE "CompanyName", "P2P Share"
+            VALUE "FileDescription", "在线互传 安装程序"
+            VALUE "FileVersion", "0.1.0"
+            VALUE "InternalName", "p2p-setup"
+            VALUE "OriginalFilename", "p2p-setup.exe"
+            VALUE "ProductName", "在线互传"
+            VALUE "ProductVersion", "0.1.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x804, 1200
+    END
+END

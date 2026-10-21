@@ -1,0 +1,23 @@
+{
+  // 这个 Worker 只提供接口和 Durable Objects，不面向用户。
+  // 静态页面由 pages/ 里的 Pages 项目提供，它通过 service binding 调这里。
+  //
+  // workers_dev 关掉：一来用户那边 workers.dev 打不开，二来没有公开路由更干净，
+  // 这个 Worker 只接受来自自己 Pages 项目的调用。
+  "name": "p2p-lighthouse",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": false,
+  "durable_objects": {
+    "bindings": [
+      { "name": "PRESENCE", "class_name": "PresenceDO" },
+      { "name": "REGISTRY", "class_name": "RegistryDO" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["PresenceDO", "RegistryDO"] }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

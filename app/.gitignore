@@ -1,0 +1,6 @@
+node_modules/
+dist/
+pages/dist/
+pages/.wrangler/
+.wrangler/
+*.log

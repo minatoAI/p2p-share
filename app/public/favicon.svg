@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="设备互传">
+  <rect width="64" height="64" rx="15" fill="#2f6feb" />
+  <g
+    fill="none"
+    stroke="#ffffff"
+    stroke-width="5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <!-- 上：往右 -->
+    <path d="M16 23h26" />
+    <path d="M36 17l7 6-7 6" />
+    <!-- 下：往左 -->
+    <path d="M48 41H22" />
+    <path d="M28 35l-7 6 7 6" />
+  </g>
+</svg>

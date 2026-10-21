@@ -1,0 +1,17 @@
+{
+  // Pages 项目：静态页面 + 把接口和信令转发给 Worker。
+  //
+  // 为什么要有这一层？因为 Durable Objects 不能定义在 Pages 项目里，官方写得很明确：
+  // "You cannot create and deploy a Durable Object within a Pages project."
+  // 所以 DO 和 Hono 接口留在 p2p-lighthouse 那个 Worker 里，Pages 只做两件事：
+  //   1. 提供 index.html 和静态资源；
+  //   2. 通过 service binding 把 /api/* 和 /ws/* 转发给 Worker。
+  //
+  // 用户看到的域名是 *.pages.dev；Worker 那边 workers_dev 是关掉的，没有公开地址。
+  "name": "p2p-share-web",
+  "pages_build_output_dir": "./dist",
+  "compatibility_date": "2026-10-01",
+  "services": [
+    { "binding": "LIGHTHOUSE", "service": "p2p-lighthouse" }
+  ]
+}

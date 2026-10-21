@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>设备互传</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: "Microsoft YaHei UI", system-ui, sans-serif;
+    margin: 0; padding: 18px 22px 28px; background: #f6f7f9; color: #1c1f23;
+    font-size: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { background: #1b1d21; color: #e8eaed; }
+    .card { background: #24272c !important; border-color: #34383e !important; }
+    .muted { color: #9aa0a6 !important; }
+    button { background: #2f333a !important; color: #e8eaed !important; border-color: #414650 !important; }
+    button.primary { background: #4c8dff !important; border-color: #4c8dff !important; color: #fff !important; }
+    input[type=text] { background: #1b1d21 !important; color: #e8eaed !important; border-color: #414650 !important; }
+    .li { border-color: #34383e !important; }
+    .bar { background: #34383e !important; }
+    .bar > i { background: #4c8dff !important; }
+  }
+  h1 { font-size: 18px; margin: 0 0 2px; }
+  h2 { font-size: 13px; margin: 0 0 6px; font-weight: 600; }
+  .muted { color: #5f6368; font-size: 12.5px; }
+  .card { background: #fff; border: 1px solid #e2e4e8; border-radius: 12px; padding: 14px 16px; margin-top: 14px; }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .between { justify-content: space-between; }
+  code { font-family: Consolas, ui-monospace, monospace; font-size: 12.5px; background: rgba(127,127,127,.13); padding: 2px 6px; border-radius: 6px; }
+  .code { font-family: Consolas, ui-monospace, monospace; font-size: 32px; letter-spacing: 5px; font-weight: 600; margin: 4px 0 2px; }
+  button { font: inherit; font-size: 13px; padding: 6px 13px; border-radius: 8px; border: 1px solid #d7dade; background: #fff; cursor: pointer; }
+  button.primary { background: #2f6fed; border-color: #2f6fed; color: #fff; }
+  button:disabled { opacity: .45; cursor: default; }
+  input[type=text] { font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 8px; border: 1px solid #d7dade; width: 130px; letter-spacing: 2px; }
+  .li { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid rgba(127,127,127,.16); font-size: 13px; }
+  .li:first-child { border-top: 0; }
+  .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #bbb; flex: none; }
+  .dot.on { background: #29a745; }
+  .bar { height: 5px; border-radius: 3px; background: rgba(127,127,127,.22); overflow: hidden; flex: 1; min-width: 60px; }
+  .bar > i { display: block; height: 100%; background: #2f6fed; width: 0; }
+  .empty { color: #8a9099; font-size: 12.5px; padding: 4px 0; }
+  .scroll { max-height: 190px; overflow-y: auto; }
+  .pill { font-size: 11.5px; padding: 1px 7px; border-radius: 99px; background: rgba(127,127,127,.16); }
+  .pill.ok { background: rgba(41,167,69,.16); color: #1e7e34; }
+  .pill.err { background: rgba(220,53,69,.15); color: #b02a37; }
+</style>
+</head>
+<body>
+  <div class="row between">
+    <h1>设备互传</h1>
+    <span class="pill" id="state">启动中</span>
+  </div>
+
+  <div class="card">
+    <div class="row between">
+      <div>
+        <strong>本机</strong>
+        <span class="muted" id="myName"></span>
+      </div>
+      <code id="device">读取中…</code>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>配对另一台设备</h2>
+    <div class="row">
+      <button class="primary" id="advertise">生成配对码</button>
+      <span class="muted">或在对方生成的码上：</span>
+      <input type="text" id="codeInput" maxlength="8" placeholder="8 位数字">
+      <button id="join">连接</button>
+    </div>
+    <div class="code" id="code">········</div>
+    <p class="muted">两端屏幕上会出现同一个六位数字，核对一致再确认。配对一次之后不用再配。</p>
+  </div>
+
+  <div class="card">
+    <h2>在线设备</h2>
+    <div id="devices"><p class="empty">还没有别的设备上线</p></div>
+  </div>
+
+  <div class="card">
+    <div class="row between">
+      <h2>发送</h2>
+      <span class="muted" id="target">未连接</span>
+    </div>
+    <div class="row">
+      <button id="pickFiles">选择文件</button>
+      <button id="pickFolder">选择文件夹</button>
+      <button id="clear">清空</button>
+      <span class="muted">也可以直接把文件拖进这个窗口</span>
+    </div>
+    <div class="scroll" id="queue"><p class="empty">还没有待发的东西</p></div>
+    <div class="row" style="margin-top:10px">
+      <button class="primary" id="send" disabled>发送</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>传输</h2>
+    <div class="scroll" id="transfers"><p class="empty">还没有传输</p></div>
+  </div>
+
+  <div class="card">
+    <h2>传输记录</h2>
+    <div class="scroll" id="history"><p class="empty">还没有记录</p></div>
+  </div>
+
+  <div class="card">
+    <h2>通知提示音</h2>
+    <ul style="margin:0;padding:0;list-style:none" id="sounds"></ul>
+    <div class="row" style="margin-top:8px">
+      <button id="preview">试听选中的</button>
+      <span class="muted" id="sound-state"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>运行记录</h2>
+    <ul style="margin:0;padding:0;list-style:none" id="log"></ul>
+  </div>
+
+<script>
+  const bridge = window.chrome && window.chrome.webview;
+  const $ = (id) => document.getElementById(id);
+
+  let sounds = [];
+  let currentSound = 'balloon';
+  let selectedSound = 'balloon';
+  let queue = [];          // 待发路径
+  let transfers = new Map();  // id -> {name, done, total, incoming}
+  let history = [];           // 落盘的记录，新的在前
+  let connected = false;
+
+  function log(text) {
+    const li = document.createElement('li');
+    li.className = 'li';
+    li.textContent = text;
+    $('log').prepend(li);
+    while ($('log').children.length > 60) $('log').lastChild.remove();
+  }
+
+  function send(msg) { if (bridge) bridge.postMessage(msg); }
+
+  function baseName(p) {
+    const parts = String(p).split(/[\\/]/);
+    return parts[parts.length - 1] || p;
+  }
+
+  function human(bytes) {
+    if (!bytes) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let i = 0, n = bytes;
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    return n.toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+  }
+
+  function renderQueue() {
+    const box = $('queue');
+    box.textContent = '';
+    if (!queue.length) {
+      const p = document.createElement('p');
+      p.className = 'empty';
+      p.textContent = '还没有待发的东西';
+      box.appendChild(p);
+    } else {
+      queue.forEach((path, index) => {
+        const row = document.createElement('div');
+        row.className = 'li';
+        const name = document.createElement('span');
+        name.className = 'grow';
+        name.textContent = baseName(path);
+        name.title = path;
+        const del = document.createElement('button');
+        del.textContent = '移除';
+        del.onclick = () => { queue.splice(index, 1); renderQueue(); };
+        row.append(name, del);
+        box.appendChild(row);
+      });
+    }
+    $('send').disabled = !connected || queue.length === 0;
+  }
+
+  function renderDevices(items) {
+    const box = $('devices');
+    box.textContent = '';
+    if (!items.length) {
+      const p = document.createElement('p');
+      p.className = 'empty';
+      p.textContent = '还没有别的设备上线';
+      box.appendChild(p);
+      return;
+    }
+    items.forEach((item) => {
+      const row = document.createElement('div');
+      row.className = 'li';
+      const dot = document.createElement('span');
+      dot.className = 'dot' + (item.online ? ' on' : '');
+      const name = document.createElement('span');
+      name.className = 'grow';
+      // 设备名允许重名，所以后四位必须露出来，不然用户分不清
+      name.textContent = (item.name || '未命名') + '  ' + item.id.slice(-4);
+      name.title = item.id;
+      const tag = document.createElement('span');
+      tag.className = 'pill';
+      tag.textContent = item.online ? '在线' : '离线';
+      row.append(dot, name, tag);
+      box.appendChild(row);
+    });
+  }
+
+  function renderTransfers() {
+    const box = $('transfers');
+    box.textContent = '';
+    if (!transfers.size) {
+      const p = document.createElement('p');
+      p.className = 'empty';
+      p.textContent = '还没有传输';
+      box.appendChild(p);
+      return;
+    }
+    for (const [, item] of transfers) {
+      const row = document.createElement('div');
+      row.className = 'li';
+      const arrow = document.createElement('span');
+      arrow.textContent = item.incoming ? '↓' : '↑';
+      const name = document.createElement('span');
+      name.className = 'grow';
+      name.textContent = item.name || item.id;
+      const bar = document.createElement('span');
+      bar.className = 'bar';
+      const fill = document.createElement('i');
+      const percent = item.total ? Math.min(100, (item.done / item.total) * 100) : 0;
+      fill.style.width = percent.toFixed(1) + '%';
+      bar.appendChild(fill);
+      const text = document.createElement('span');
+      text.className = 'muted';
+      text.textContent = item.total ? Math.round(percent) + '%' : human(item.done);
+      row.append(arrow, name, bar, text);
+      box.appendChild(row);
+    }
+  }
+
+  function when(ms) {
+    if (!ms) return '';
+    const d = new Date(ms);
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    if (sameDay) return hm;
+    return (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + hm;
+  }
+
+  function renderHistory() {
+    const box = $('history');
+    box.textContent = '';
+    if (!history.length) {
+      const p = document.createElement('p');
+      p.className = 'empty';
+      p.textContent = '还没有记录';
+      box.appendChild(p);
+      return;
+    }
+    history.slice(0, 50).forEach((item) => {
+      const row = document.createElement('div');
+      row.className = 'li';
+      const arrow = document.createElement('span');
+      arrow.textContent = item.direction === 'in' ? '↓' : '↑';
+      const name = document.createElement('span');
+      name.className = 'grow';
+      name.textContent = item.name || item.path;
+      name.title = item.path;
+      const peer = document.createElement('span');
+      peer.className = 'muted';
+      peer.textContent = item.peer || '';
+      const size = document.createElement('span');
+      size.className = 'muted';
+      size.textContent = human(item.size);
+      const time = document.createElement('span');
+      time.className = 'muted';
+      time.textContent = when(item.at);
+      row.append(arrow, name, peer, size, time);
+      box.appendChild(row);
+    });
+  }
+
+  function renderSounds() {
+    const box = $('sounds');
+    box.textContent = '';
+    sounds.forEach((item) => {
+      const li = document.createElement('li');
+      li.className = 'li';
+      const label = document.createElement('label');
+      label.style.cssText = 'display:flex;align-items:center;gap:8px;cursor:pointer';
+      const radio = document.createElement('input');
+      radio.type = 'radio';
+      radio.name = 'sound';
+      radio.checked = item.id === selectedSound;
+      radio.onchange = () => { selectedSound = item.id; send({ t: 'set-sound', id: item.id }); };
+      const text = document.createElement('span');
+      const seconds = item.seconds > 0 ? '（' + Number(item.seconds).toFixed(2) + ' 秒）' : '';
+      text.textContent = item.label + seconds;
+      label.append(radio, text);
+      li.appendChild(label);
+      box.appendChild(li);
+    });
+    const found = sounds.find((s) => s.id === currentSound);
+    $('sound-state').textContent = '当前：' + (found ? found.label : currentSound);
+  }
+
+  if (!bridge) {
+    log('桥没接上：这不是在 WebView2 里打开的');
+  }
+
+  if (bridge) {
+    bridge.addEventListener('message', (event) => {
+      const msg = event.data;
+      if (msg.t === 'device') {
+        $('device').textContent = msg.id;
+        send({ t: 'device-shown', id: msg.id });
+      } else if (msg.t === 'status') {
+        if (msg.deviceName) $('myName').textContent = '　' + msg.deviceName;
+      } else if (msg.t === 'state') {
+        const map = {
+          'lighthouse-connecting': ['连接灯塔中', ''],
+          ready: ['已就绪', 'ok'],
+          pairing: ['配对中', ''],
+          connected: ['已连接', 'ok'],
+          error: ['出错', 'err'],
+          stopped: ['已停止', ''],
+        };
+        const item = map[msg.value] || [msg.value, ''];
+        const pill = $('state');
+        pill.textContent = item[0];
+        pill.className = 'pill ' + item[1];
+        connected = msg.value === 'connected';
+        if (msg.detail) log(msg.detail);
+        if (!connected) $('target').textContent = '未连接';
+        renderQueue();
+      } else if (msg.t === 'presence') {
+        renderDevices(msg.items || []);
+      } else if (msg.t === 'code') {
+        const digits = String(msg.code || '');
+        $('code').textContent = digits.slice(0, 4) + ' ' + digits.slice(4);
+        log('取到配对码 ' + digits);
+        send({ t: 'code-shown', code: digits });
+      } else if (msg.t === 'peer') {
+        $('target').textContent = '发给 ' + (msg.name || msg.id);
+        renderQueue();
+      } else if (msg.t === 'files') {
+        (msg.paths || []).forEach((p) => { if (!queue.includes(p)) queue.push(p); });
+        renderQueue();
+      } else if (msg.t === 'progress') {
+        transfers.set(msg.id, msg);
+        renderTransfers();
+      } else if (msg.t === 'file-done') {
+        log('收到文件 ' + baseName(msg.path));
+      } else if (msg.t === 'sent') {
+        log('已发出 ' + baseName(msg.path));
+        queue = queue.filter((p) => p !== msg.path);
+        renderQueue();
+      } else if (msg.t === 'history') {
+        if (msg.append) {
+          history = (msg.items || []).concat(history);
+        } else {
+          history = msg.items || [];
+        }
+        renderHistory();
+        // 回报一条：界面确实把记录铺上去了，不是只收到了消息
+        send({ t: 'history-shown', count: history.length });
+      } else if (msg.t === 'text') {
+        log('收到文字：' + msg.text);
+      } else if (msg.t === 'sounds') {
+        sounds = msg.items || [];
+        currentSound = msg.current;
+        selectedSound = msg.current;
+        renderSounds();
+      } else if (msg.t === 'log') {
+        log(msg.text);
+      }
+    });
+    send({ t: 'ready' });
+  }
+
+  $('advertise').onclick = () => {
+    $('code').textContent = '········';
+    send({ t: 'advertise' });
+    log('正在向灯塔要配对码…');
+  };
+  $('join').onclick = () => {
+    const code = $('codeInput').value.trim();
+    if (code.length === 8) { send({ t: 'join', code }); log('正在用 ' + code + ' 连接…'); }
+  };
+  $('pickFiles').onclick = () => send({ t: 'pick-files' });
+  $('pickFolder').onclick = () => send({ t: 'pick-folder' });
+  $('clear').onclick = () => { queue = []; renderQueue(); };
+  $('send').onclick = () => {
+    if (!queue.length) return;
+    send({ t: 'send-files', paths: queue.slice() });
+    log('开始发送 ' + queue.length + ' 项');
+  };
+  $('preview').onclick = () => send({ t: 'preview-sound', id: selectedSound });
+
+  renderQueue();
+  renderTransfers();
+  renderHistory();
+</script>
+</body>
+</html>

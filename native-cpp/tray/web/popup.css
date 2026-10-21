@@ -1,0 +1,1726 @@
+/* 小窗样式。颜色和网页端同一套变量，看起来是同一个产品。 */
+:root {
+  color-scheme: light dark;
+  --bg: #f6f7f9;
+  --fg: #1c1f23;
+  --muted: #6b7280;
+  --line: #e3e6ea;
+  --card: #ffffff;
+  --accent: #2f6feb;
+  --ok: #16a34a;
+  --warn: #b45309;
+  --danger: #d92d20;
+  --hover: rgba(15, 23, 42, 0.05);
+  --soft: rgba(15, 23, 42, 0.04);
+  --ring: rgba(47, 111, 235, 0.16);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #16181c;
+    --fg: #e6e8ea;
+    --muted: #9aa1ab;
+    --line: #2b2f36;
+    --card: #1e2126;
+    --accent: #5b8cf7;
+    --ok: #34d399;
+    --warn: #fbbf24;
+    --danger: #f87171;
+    --hover: rgba(255, 255, 255, 0.06);
+    --soft: rgba(255, 255, 255, 0.045);
+    --ring: rgba(91, 140, 247, 0.2);
+  }
+}
+
+:root[data-theme='dark'] {
+  --bg: #16181c;
+  --fg: #e6e8ea;
+  --muted: #9aa1ab;
+  --line: #2b2f36;
+  --card: #1e2126;
+  --accent: #5b8cf7;
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --danger: #f87171;
+  --hover: rgba(255, 255, 255, 0.06);
+  --soft: rgba(255, 255, 255, 0.045);
+  --ring: rgba(91, 140, 247, 0.2);
+}
+
+/*
+ * 托盘小窗里不画滚动条。
+ *
+ * WebView2 默认那条灰槽又宽又亮，和这套卡片界面完全不搭；小窗高度有限，
+ * 列表随时会超出一截，留一条常驻竖杠很扎眼。滚动本身保留（滚轮/触控板），
+ * 底部用淡出提示"下面还有"，见 refreshFades。
+ */
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13.5px/1.5 'Segoe UI Variable Text', 'Segoe UI', 'Microsoft YaHei UI', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+.sheet {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+  animation: rise 0.18s cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+/* ---------- 顶栏 ---------- */
+
+.hd {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  height: 48px;
+  padding: 0 10px 0 8px;
+}
+
+.device {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.device:hover {
+  background: var(--hover);
+}
+
+.dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ok) 18%, transparent);
+}
+
+.dot.off {
+  background: var(--muted);
+  box-shadow: none;
+}
+
+.device-name {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.device-state {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chev {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.theme-btn {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin-right: 2px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.theme-btn:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.theme-btn svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.theme-btn .moon {
+  display: none;
+}
+
+:root[data-theme='dark'] .theme-btn .sun {
+  display: none;
+}
+
+:root[data-theme='dark'] .theme-btn .moon {
+  display: block;
+}
+
+.collapse {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.collapse:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.collapse svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+}
+
+/* ---------- 未设置保存位置 ---------- */
+
+.banner {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  margin: 0 12px 10px;
+  padding: 9px 12px;
+  border: 1px solid color-mix(in oklab, #f59e0b 28%, var(--line));
+  border-radius: 11px;
+  background: color-mix(in oklab, #f59e0b 11%, var(--bg));
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.banner:hover {
+  background: color-mix(in oklab, #f59e0b 17%, var(--bg));
+}
+
+.banner .warn {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: var(--warn);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.banner-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.banner-text b {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.banner-text i {
+  display: block;
+  margin-top: 1px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-style: normal;
+}
+
+.banner .go {
+  flex: none;
+  color: var(--warn);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.banner.flash {
+  animation: banner-flash 1.4s ease;
+}
+
+@keyframes banner-flash {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+  30% {
+    box-shadow: 0 0 0 4px color-mix(in oklab, #f59e0b 28%, transparent);
+  }
+}
+
+/* ---------- 分段标签 ---------- */
+
+.tabs {
+  position: relative;
+  display: flex;
+  flex: none;
+  margin: 0 12px 8px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--soft);
+}
+
+.thumb {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc(50% - 3px);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12),
+    0 0 0 1px color-mix(in oklab, var(--fg) 6%, transparent);
+  transition: transform 0.26s cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+.tabs[data-active='files'] .thumb {
+  transform: translateX(100%);
+}
+
+.tab {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  height: 28px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.tab[aria-selected='true'] {
+  color: var(--fg);
+}
+
+/* ---------- 列表 ---------- */
+
+.view {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  padding-bottom: 6px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.view > * {
+  flex: 0 0 auto;
+}
+
+.view > .link-body {
+  flex: 1 1 auto;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 8px;
+}
+
+/* ---------- 分组（像资源管理器那样） ---------- */
+
+.groups {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0 8px 2px;
+}
+
+.group {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 34px;
+  overflow: hidden;
+}
+
+#groupDirect {
+  flex: 1.15 1 0;
+}
+
+.group.collapsed {
+  flex: 0 0 34px !important;
+}
+
+.group.collapsed .group-body {
+  display: none;
+}
+
+.group-hd {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 6px;
+  border-radius: 9px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.group-hd:hover {
+  background: var(--hover);
+}
+
+.group-hd .chev {
+  width: 13px;
+  height: 13px;
+  transition: transform 0.18s ease;
+}
+
+.group.collapsed .group-hd .chev {
+  transform: rotate(-90deg);
+}
+
+.group-title {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.group-count {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.group-add {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.group-add:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.empty.share-empty {
+  border: 1px dashed var(--line);
+  border-radius: 9px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
+  padding: 10px;
+  cursor: pointer;
+}
+
+.empty.share-empty:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.group-body {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.group-body.fade,
+.settings-body.fade,
+.view.fade {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent);
+}
+
+.splitter {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  height: 10px;
+  cursor: row-resize;
+}
+
+.splitter i {
+  width: calc(100% - 18px);
+  height: 1px;
+  border-radius: 1px;
+  background: var(--line);
+  transition: background 0.15s, height 0.15s;
+}
+
+.splitter:hover i,
+.splitter.dragging i {
+  height: 2px;
+  background: color-mix(in oklab, var(--accent) 55%, var(--line));
+}
+
+body.dragging {
+  cursor: row-resize;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 10px;
+}
+
+.row:hover {
+  background: var(--hover);
+}
+
+.empty {
+  padding: 26px 10px;
+  color: var(--muted);
+  font-size: 12.5px;
+  text-align: center;
+}
+
+/* ---------- 剪贴板 ---------- */
+
+.clip-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 2px 10px 8px;
+}
+
+.clip-head-title {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.clip-head .btn {
+  flex: none;
+  width: auto;
+  height: 30px;
+  padding: 0 11px;
+}
+
+.clip.latest {
+  position: relative;
+  margin: 0 0 4px;
+  border: 1px solid color-mix(in oklab, var(--accent) 35%, var(--line));
+  background: color-mix(in oklab, var(--accent) 7%, var(--card));
+}
+
+.clip.latest:hover {
+  background: color-mix(in oklab, var(--accent) 12%, var(--card));
+}
+
+.clip-latest-label {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.clip-history-hd {
+  padding: 8px 10px 3px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.clip {
+  cursor: pointer;
+  align-items: flex-start;
+}
+
+/* ---------- 确认弹层 ---------- */
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(0, 0, 0, 0.32);
+}
+
+.modal-card {
+  width: 100%;
+  max-width: 330px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--card);
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.34);
+  animation: modal-in 0.16s cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+
+.modal-kicker {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.modal-title {
+  margin-top: 4px;
+  overflow: hidden;
+  font-size: 16px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.modal-desc {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.modal-sas {
+  margin: 14px 0 12px;
+  color: var(--accent);
+  font: 600 30px/1.15 ui-monospace, Consolas, monospace;
+  letter-spacing: 7px;
+  text-align: center;
+}
+
+.file-detail {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.file-path {
+  margin-top: 8px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: var(--soft);
+  color: var(--muted);
+  font: 11px/1.45 ui-monospace, Consolas, monospace;
+  word-break: break-all;
+  user-select: text;
+}
+
+.modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 16px;
+}
+
+.modal-actions .btn {
+  flex: 1 1 auto;
+  height: 34px;
+  padding: 0 11px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.modal-actions .btn.primary {
+  flex-basis: 100%;
+}
+
+.clip-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.clip-text {
+  display: -webkit-box;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.clip-meta {
+  flex: none;
+  align-self: flex-start;
+  padding-top: 1px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.clip.flash {
+  background: color-mix(in oklab, var(--ok) 12%, transparent);
+}
+
+.clip.flash .clip-meta {
+  color: var(--ok);
+}
+
+/* ---------- 传输记录 ---------- */
+
+.ficon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 30px;
+  height: 34px;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.ficon.txt {
+  background: #64748b;
+}
+
+.ficon.png,
+.ficon.jpg {
+  background: #8b5cf6;
+}
+
+.ficon.mp4 {
+  background: #f97316;
+}
+
+.ficon.zip {
+  background: #0ea5e9;
+}
+
+.ficon.default {
+  background: #94a3b8;
+}
+
+.file-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.file-name {
+  display: block;
+  overflow: hidden;
+  font-size: 13px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.file-meta {
+  display: block;
+  overflow: hidden;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.file-end {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.status {
+  color: var(--muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.status.active {
+  color: var(--accent);
+}
+
+.dots {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--muted);
+  font: 15px/1 'Segoe UI', sans-serif;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s;
+}
+
+.row:hover .dots,
+.dots:focus-visible,
+.dots.open {
+  opacity: 1;
+}
+
+.dots.open {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.dots:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.bar {
+  display: block;
+  overflow: hidden;
+  height: 3px;
+  margin-top: 7px;
+  border-radius: 2px;
+  background: var(--line);
+}
+
+.bar i {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width 0.5s linear;
+}
+
+/* ---------- 底栏 ---------- */
+
+.ft {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 12px;
+}
+
+.ft-row {
+  display: flex;
+  gap: 8px;
+}
+
+.send-row {
+  display: flex;
+  gap: 8px;
+}
+
+.send-row .btn.primary {
+  flex: 1;
+  min-width: 0;
+}
+
+.send-hint {
+  font-size: 11px;
+  font-weight: 400;
+  opacity: 0.85;
+}
+
+#sendLabel {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.send-row .btn.caret {
+  flex: 0 0 44px;
+  width: 44px;
+  padding: 0;
+}
+
+.btn.caret svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--soft);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.14s, transform 0.08s;
+}
+
+.btn:active {
+  transform: scale(0.985);
+}
+
+.btn.primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.btn.primary:hover {
+  background: color-mix(in oklab, var(--accent) 88%, #000);
+}
+
+/* 撤销分享这类收不回来的操作，按钮得看得出分量 */
+.btn.danger {
+  background: var(--danger);
+  color: #fff;
+}
+
+.btn.danger:hover {
+  background: color-mix(in oklab, var(--danger) 88%, #000);
+}
+
+.btn.secondary {
+  flex: 1;
+  height: 34px;
+  background: var(--soft);
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.btn.secondary:hover {
+  background: var(--hover);
+}
+
+.btn.secondary svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.btn.ghost {
+  background: transparent;
+}
+
+.btn.ghost:hover {
+  background: var(--hover);
+}
+
+.btn.wide {
+  width: 100%;
+}
+
+.btn.tiny {
+  height: 32px;
+  padding: 0 12px;
+  font-size: 12px;
+  background: var(--soft);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* ---------- 子页面 ---------- */
+
+.sub-hd {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px 2px;
+}
+
+.sub-hd span {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.back {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--muted);
+  font: 15px/1 'Segoe UI', sans-serif;
+  cursor: pointer;
+}
+
+.back:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.view-ft {
+  display: flex;
+  flex: none;
+  gap: 8px;
+  padding: 10px 16px 14px;
+}
+
+.view-ft .btn.primary {
+  flex: 1;
+}
+
+/* ---------- 发送 ---------- */
+
+.send-body {
+  padding: 8px 14px 0;
+}
+
+.picked {
+  padding: 10px 12px;
+  border-radius: 11px;
+  background: var(--soft);
+}
+
+.picked-name {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.picked-meta {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.field-label {
+  padding: 14px 3px 6px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.targets {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.target {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--card);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.14s, box-shadow 0.14s;
+}
+
+.target:hover {
+  border-color: color-mix(in oklab, var(--accent) 35%, var(--line));
+}
+
+.target[aria-checked='true'] {
+  border-color: color-mix(in oklab, var(--accent) 55%, var(--line));
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.target.offline {
+  opacity: 0.55;
+}
+
+.target.offline:hover {
+  border-color: var(--line);
+}
+
+.radio {
+  position: relative;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--muted);
+  border-radius: 50%;
+}
+
+.target[aria-checked='true'] .radio {
+  border-color: var(--accent);
+}
+
+.target[aria-checked='true'] .radio::after {
+  position: absolute;
+  inset: 2.5px;
+  border-radius: 50%;
+  background: var(--accent);
+  content: '';
+}
+
+.target-name {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.target-sub {
+  overflow: hidden;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.target .link-ic {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+
+.target .link-ic svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ---------- 链接 ---------- */
+
+.link-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+  padding: 0 20px;
+  text-align: center;
+}
+
+.okmark {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 12px;
+  border-radius: 50%;
+  background: color-mix(in oklab, var(--ok) 16%, transparent);
+  color: var(--ok);
+  font-size: 21px;
+}
+
+.link-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.link-desc {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.link-box {
+  display: flex;
+  width: 100%;
+  gap: 6px;
+  margin-top: 16px;
+}
+
+.link-text {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: 9px;
+  background: var(--soft);
+  font: 11px/1.55 ui-monospace, Consolas, monospace;
+  text-align: left;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+/* ---------- 添加设备 ---------- */
+
+.pair-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  justify-content: center;
+  padding: 4px 22px 18px;
+}
+
+.pair-body .lede {
+  margin: 0 0 14px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.code-input {
+  width: 100%;
+  height: 48px;
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--soft);
+  color: var(--fg);
+  font: 600 20px/1 ui-monospace, Consolas, monospace;
+  letter-spacing: 9px;
+  text-align: center;
+  text-indent: 9px;
+  outline: none;
+}
+
+.code-input:focus {
+  border-color: color-mix(in oklab, var(--accent) 55%, var(--line));
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+.code-input::placeholder {
+  color: color-mix(in oklab, var(--muted) 55%, transparent);
+}
+
+.pair-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  margin-bottom: 12px;
+}
+
+.pair-input-row .code-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.pair-body .pair-input-row .btn {
+  flex: none;
+  width: auto;
+  height: 48px;
+  padding: 0 14px;
+}
+
+/* "展示我的码"是独立一屏：把输入区收起来，二维码才不会被挤到滚动外 */
+#view-pair.showing-code .pair-input-row,
+#view-pair.showing-code #pairGo,
+#view-pair.showing-code .or,
+#view-pair.showing-code #pairScan {
+  display: none;
+}
+
+#view-pair.showing-code .my-code {
+  margin-top: 0;
+}
+
+.pair-qr {
+  width: 164px;
+  margin: 12px auto 0;
+  padding: 8px;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.pair-qr canvas {
+  display: block;
+  width: 148px;
+  height: 148px;
+  image-rendering: pixelated;
+}
+
+.pair-qr-hint {
+  display: block;
+  margin-top: 6px;
+  color: #6b7280;
+  font-size: 11px;
+  text-align: center;
+}
+
+.pair-link {
+  margin-top: 8px;
+  padding: 4px 6px;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.pair-link:hover {
+  text-decoration: underline;
+}
+
+.code-links {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 6px;
+}
+
+.code-links .pair-link {
+  margin-top: 0;
+}
+
+/* ---------- 扫码 ---------- */
+
+.scan-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 22px 18px;
+}
+
+.scan-frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: 16px;
+  background: radial-gradient(circle at 50% 40%, #23262d, #0b0c0f 70%);
+  overflow: hidden;
+}
+
+.scan-frame video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.scan-frame::after {
+  position: absolute;
+  right: 12%;
+  left: 12%;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 14px var(--accent);
+  content: '';
+  opacity: 0.75;
+  animation: scan-sweep 2.6s ease-in-out infinite;
+}
+
+@keyframes scan-sweep {
+  0%,
+  100% {
+    top: 20%;
+  }
+  50% {
+    top: 80%;
+  }
+}
+
+.scan-veil {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(11, 12, 15, 0.55);
+  color: #cbd5e1;
+  font-size: 12.5px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.scan-desc {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.pair-body .btn {
+  flex: none;
+  width: 100%;
+  height: 40px;
+}
+
+/* ---------- 设置 ---------- */
+
+.settings-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 9px;
+  padding: 4px 22px 18px;
+  overflow-y: auto;
+}
+
+.settings-body .field-label {
+  margin-top: 8px;
+}
+
+.settings-body .field-label:first-child {
+  margin-top: 0;
+}
+
+.text-input {
+  width: 100%;
+  height: 40px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--soft);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+}
+
+.text-input:focus {
+  border-color: color-mix(in oklab, var(--accent) 55%, var(--line));
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+.settings-body .path-btn {
+  flex: none;
+  height: 40px;
+  overflow: hidden;
+}
+
+.settings-body .path-btn span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowline {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 1px;
+  color: var(--fg);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.rowline input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+}
+
+.settings-body .btn.ghost {
+  flex: none;
+  height: 40px;
+  margin-top: 10px;
+}
+
+.contact-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.contact-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+}
+
+.contact-name {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: text;
+}
+
+.contact-name:hover {
+  border-color: var(--line);
+  background: var(--soft);
+}
+
+.contact-del {
+  flex: none;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.contact-del:hover {
+  background: color-mix(in oklab, #e5484d 18%, transparent);
+  color: #ff8a8f;
+}
+
+.contact-row .text-input {
+  flex: 1;
+  height: 34px;
+}
+
+.contact-row .mini {
+  flex: none;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--soft);
+  color: var(--fg);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.contact-row .mini.primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.contact-row .ask {
+  flex: 1;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.or {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.or::before,
+.or::after {
+  height: 1px;
+  background: var(--line);
+  content: '';
+  flex: 1;
+}
+
+/* ---------- 主题切换的圆形扩散 ---------- */
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+::view-transition-group(root),
+::view-transition-image-pair(root) {
+  background: transparent;
+}
+
+html.vt-spread::view-transition-new(root) {
+  z-index: 2;
+}
+
+html.vt-spread::view-transition-old(root) {
+  z-index: 1;
+}
+
+html.vt-retract::view-transition-old(root) {
+  z-index: 2;
+}
+
+html.vt-retract::view-transition-new(root) {
+  z-index: 1;
+}
+
+.my-code {
+  margin-top: 14px;
+  text-align: center;
+}
+
+.my-code-label {
+  display: block;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.my-code-value {
+  display: block;
+  margin-top: 4px;
+  font: 600 26px/1.2 ui-monospace, Consolas, monospace;
+  letter-spacing: 6px;
+}
+
+/* ---------- 弹层与提示 ---------- */
+
+.popmenu {
+  position: fixed;
+  z-index: 40;
+  min-width: 200px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: 0 16px 38px rgba(0, 0, 0, 0.24);
+}
+
+.popmenu button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.popmenu button:hover {
+  background: var(--hover);
+}
+
+.popmenu button:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.popmenu button:disabled:hover {
+  background: none;
+}
+
+.popmenu button.danger {
+  color: var(--danger);
+}
+
+.popmenu .sep {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--line);
+}
+
+.popmenu .empty {
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.popmenu .sub {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.popmenu .dot {
+  width: 6px;
+  height: 6px;
+  box-shadow: none;
+}
+
+.toast {
+  position: fixed;
+  bottom: 96px;
+  left: 50%;
+  z-index: 50;
+  padding: 7px 13px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--fg) 90%, transparent);
+  color: var(--bg);
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, 4px);
+  transition: opacity 0.16s, transform 0.16s;
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}

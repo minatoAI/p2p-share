@@ -1,0 +1,46 @@
+{
+  "name": "p2p-lighthouse",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "灯塔式 P2P 跨设备互传：设计框架的可跑骨架",
+  "scripts": {
+    "dev": "vite",
+    "dev:worker": "wrangler dev",
+    "build": "vite build",
+    "deploy": "npm run build && npm run deploy:worker && npm run deploy:pages",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.worker.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:core": "vitest run",
+    "test:worker": "node tests/worker/run.mjs",
+    "test:e2e": "playwright test",
+    "test:worker:outside": "node scripts/run-outside.mjs test:worker",
+    "test:e2e:outside": "node scripts/run-outside.mjs test:e2e",
+    "test:all": "npm run test:core && npm run build && npm run test:worker",
+    "dev:lan": "vite --host 0.0.0.0",
+    "deploy:worker": "wrangler deploy",
+    "deploy:pages": "cd pages && wrangler pages deploy --branch main",
+    "dev:pages": "cd pages && wrangler pages dev"
+  },
+  "dependencies": {
+    "ggwave": "^0.4.0",
+    "hono": "^4.13.13",
+    "qrcode": "^1.5.4",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zxing-wasm": "^3.1.5"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261015.1",
+    "@playwright/test": "^1.64.1",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.4",
+    "wrangler": "^4.151.0"
+  }
+}

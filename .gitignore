@@ -1,0 +1,43 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# web build/test output
+dist/
+app/pages/dist/
+app/.wrangler/
+.wrangler/
+test-results/
+playwright-report/
+blob-report/
+
+# native build output
+native-cpp/build/
+native-cpp/build-static/
+native-cpp/build-tray/
+native-cpp/build-tray-static/
+*.obj
+*.pdb
+*.ilk
+*.exe
+
+# android build output
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.apk
+*.aab
+*.idsig
+*.jks
+*.keystore
+
+# local env / secrets
+.env
+.env.*
+.dev.vars
+*.pem
+*.p12
+*.log
+.DS_Store
+Thumbs.db
