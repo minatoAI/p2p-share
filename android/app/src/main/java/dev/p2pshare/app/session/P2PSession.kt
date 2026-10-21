@@ -5,6 +5,9 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
@@ -29,7 +32,7 @@ import dev.p2pshare.app.core.Identity
 import dev.p2pshare.app.core.LookupCode
 import dev.p2pshare.app.core.Meta
 import dev.p2pshare.app.core.NewCode
-import dev.p2pshare.app.core.PLATFORM_NATIVE
+import dev.p2pshare.app.core.PLATFORM_ANDROID
 import dev.p2pshare.app.core.PairRequest
 import dev.p2pshare.app.core.PairResponse
 import dev.p2pshare.app.core.Pairing
@@ -51,6 +54,7 @@ import dev.p2pshare.app.core.SignalError
 import dev.p2pshare.app.core.SignalLinkState
 import dev.p2pshare.app.core.SignalMessage
 import dev.p2pshare.app.core.SignalingClient
+import dev.p2pshare.app.core.TextAck
 import dev.p2pshare.app.core.TextMessage
 import dev.p2pshare.app.core.TransferEngine
 import dev.p2pshare.app.core.TransferHandlers
@@ -203,6 +207,16 @@ class P2PSession(context: Context) : ShareSessions {
     /** 息屏或锁屏期间按离线处理；亮屏解锁后恢复 */
     private var screenOffline = false
     private var screenReceiverRegistered = false
+    /** 应用是否在前台：后台时的连接失败先藏起来，不打扰用户 */
+    private var appForeground = true
+    /** 默认网络能不能用；无网期间不弹失败、不排重连，等系统通知恢复 */
+    private var networkAvailable = true
+    private var networkCallbackRegistered = false
+    /** 待发内容：断网/息屏/重连期间先排住，连上后按顺序补发 */
+    private val pendingTexts = mutableMapOf<String, MutableList<PendingText>>()
+    private val pendingFiles = mutableMapOf<String, MutableList<PendingFile>>()
+    /** 发出去等 text-ack 的文字：id -> 8 秒超时任务 */
+    private val textAckJobs = mutableMapOf<String, Job>()
     private val logClock = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
 
     private val screenReceiver = object : BroadcastReceiver() {
@@ -213,6 +227,25 @@ class P2PSession(context: Context) : ShareSessions {
                 // 所以隔一会儿再看几次，确认屏幕亮着且已经解锁才恢复上线
                 Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> scheduleOnlineCheck()
             }
+        }
+    }
+
+    /**
+     * 系统网络变化。
+     *
+     * 断网和恢复都可能连续回调好几次（默认网络切换、Wi-Fi 掉回移动网络），
+     * 这里以当前默认网络的实际能力为准，不跟着单次回调走。
+     */
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) = handleNetworkChange()
+
+        override fun onLost(network: Network) = handleNetworkChange()
+
+        override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) =
+            handleNetworkChange()
+
+        private fun handleNetworkChange() {
+            scope.launch { applyNetworkState(networkUsable()) }
         }
     }
 
@@ -245,6 +278,7 @@ class P2PSession(context: Context) : ShareSessions {
         // 这时还没收到 presence，只能按 lastSeenAt / pairedAt 估离线起点。
         pruneContacts(includeNeverSeenOffline = true)
         registerScreenReceiver()
+        registerNetworkCallback()
         signal.start()
         scope.launch(Dispatchers.IO) { pruneSharedCopies() }
         // 光靠启动和 presence 变化，界面上一直没人动的时候过期记录会一直留着。
@@ -260,6 +294,7 @@ class P2PSession(context: Context) : ShareSessions {
 
     fun close() {
         unregisterScreenReceiver()
+        unregisterNetworkCallback()
         pruneJob?.cancel()
         pruneJob = null
         signal.close()
@@ -294,6 +329,149 @@ class P2PSession(context: Context) : ShareSessions {
         screenReceiverRegistered = false
     }
 
+    private fun registerNetworkCallback() {
+        if (networkCallbackRegistered) return
+        networkAvailable = networkUsable()
+        val manager = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return
+        runCatching {
+            manager.registerDefaultNetworkCallback(networkCallback)
+            networkCallbackRegistered = true
+        }.onFailure { log("监听网络状态失败：${it.message ?: "未知原因"}") }
+    }
+
+    private fun unregisterNetworkCallback() {
+        if (!networkCallbackRegistered) return
+        val manager = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        runCatching { manager?.unregisterNetworkCallback(networkCallback) }
+        networkCallbackRegistered = false
+    }
+
+    /**
+     * 当前默认网络到底能不能用。
+     *
+     * 只看 activeNetwork 不够：Wi-Fi 还连着但没有外网时它照样存在。这里按
+     * ConnectivityManager 给出的能力判断，只有连网络接口都没有（飞行模式、
+     * 关 Wi-Fi 和数据）时才算「确认无网」，不拿没有校验通过的 Wi-Fi 误报。
+     */
+    private fun networkUsable(): Boolean {
+        val manager = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return true
+        val network = manager.activeNetwork ?: return false
+        val caps = manager.getNetworkCapabilities(network) ?: return false
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) ||
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ||
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+    }
+
+    /** 系统报网络状态变化。恢复的时候先静默重连，别一上来就弹重试横幅。 */
+    private fun applyNetworkState(available: Boolean) {
+        if (networkAvailable == available) return
+        networkAvailable = available
+        if (!available) {
+            log("网络已断开，先藏起重连提示")
+            pauseRetries()
+            markPeersQuiet()
+            return
+        }
+        log("网络已恢复，静默重连")
+        // 恢复过程中同样保持安静：连上之前不显示「重连过」或失败
+        markPeersQuiet()
+        revealPermanentFailures()
+        if (screenOffline || !appForeground) return
+        signal.start()
+        resumeQuietly()
+    }
+
+    /** 无网/息屏期间停掉退避循环，免得一遍遍撞墙；恢复后重新从第一档开始。 */
+    private fun pauseRetries() {
+        for (conn in conns.values) {
+            conn.autoRetryJob?.cancel()
+            conn.autoRetryJob = null
+            conn.autoRetries = 0
+        }
+    }
+
+    /** 把所有会话先标成「安静」，等真正连上再让状态露出来。 */
+    private fun markPeersQuiet() {
+        _state.update { state ->
+            state.copy(peers = state.peers.mapValues { (_, peer) -> peer.copy(quiet = true) })
+        }
+    }
+
+    /**
+     * 应用前后台切换。
+     *
+     * 后台时连接失败先不弹；回到前台静默补一次连接，用户看不到重连横幅，
+     * 只会在头栏看到「正在恢复连接」。
+     */
+    fun setForeground(foreground: Boolean) {
+        if (appForeground == foreground) return
+        appForeground = foreground
+        if (!foreground) {
+            markPeersQuiet()
+            return
+        }
+        // 后台期间藏起来的是「重试多少次都没用」的失败：回到前台把它露出来，
+        // 别让用户对着一页空白猜。能自动恢复的那些继续静默重连。
+        revealPermanentFailures()
+        if (screenOffline || !networkAvailable) return
+        signal.start()
+        resumeQuietly()
+    }
+
+    /** 认证失败这类重试也没用的原因，等用户回到前台/网络恢复后再显示，不提前打扰。 */
+    private fun revealPermanentFailures() {
+        for (conn in conns.values) {
+            val peer = _state.value.peers[conn.peerId] ?: continue
+            if (peer.phase != SessionPhase.FAILED || peer.autoRetrying) continue
+            if (!conn.permanentFailure) continue
+            conn.silent = false
+            setPhase(conn, SessionPhase.FAILED, peer.message)
+        }
+    }
+
+    /**
+     * 亮屏、网络恢复、回到前台后的统一入口：把当前会话和有待发内容的对端
+     * 静默连回去。连上后 [maybeReady] 会把排队的内容补发出去。
+     */
+    private fun resumeQuietly() {
+        if (screenOffline || !networkAvailable || !appForeground) return
+        val targets = buildSet {
+            activePeerId?.let(::add)
+            pendingTexts.filterValues { it.isNotEmpty() }.keys.forEach(::add)
+            pendingFiles.filterValues { it.isNotEmpty() }.keys.forEach(::add)
+        }
+        for (peerId in targets) {
+            val conn = conns[peerId] ?: continue
+            if (contacts.get(peerId) == null) continue
+            if (conn.phase == SessionPhase.READY) {
+                if (!flushPendingSends(peerId) && hasPending(peerId)) {
+                    // 链路已经悄悄断了：按断线处理，自动重连后再补发
+                    failConn(conn, "连接已断开")
+                }
+            } else {
+                startQuietRetry(conn)
+            }
+        }
+    }
+
+    /** 不用惊动用户的重连：失败前几次不显示横幅，连上后也不提示「重连过」。 */
+    private fun startQuietRetry(conn: Conn) {
+        if (conn.permanentFailure) return
+        if (conn.phase == SessionPhase.SIGNALING ||
+            conn.phase == SessionPhase.ICE ||
+            conn.phase == SessionPhase.AUTH
+        ) {
+            return
+        }
+        if (conn.autoRetryJob?.isActive == true) return
+        conn.silent = true
+        conn.autoRetries = 0
+        scheduleAutoRetry(conn)
+    }
+
     private fun screenUsable(): Boolean {
         val power = appContext.getSystemService(Context.POWER_SERVICE) as? PowerManager
         val keyguard = appContext.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
@@ -306,12 +484,14 @@ class P2PSession(context: Context) : ShareSessions {
      * 息屏或锁屏等于下线：停止报码、断开数据通道、关掉灯塔连接。
      *
      * 灯塔的连接一断，watcher 立刻收到离线推送；分享链接因此变成「对方不在线」。
-     * 正在传的文件标成「已取消（屏幕关闭）」，不做续传。
+     * 正在传的文件标成「已取消（屏幕关闭）」，不做续传。界面上的失败和重连
+     * 提示在息屏期间一律藏着，亮屏后静默连回来。
      */
     private fun goOffline(reason: String) {
         if (screenOffline) return
         screenOffline = true
         log("$reason，按离线处理")
+        pauseRetries()
         stopAdvertising()
         pairTimeout?.cancel()
         pairTimeout = null
@@ -327,6 +507,9 @@ class P2PSession(context: Context) : ShareSessions {
             val link = conn.link
             val rtc = conn.rtc
             conn.engine = null
+            conn.silent = true
+            // 息屏拆链路之后，之前那次失败的原因不再适用，亮屏重来一遍
+            conn.permanentFailure = false
             engine?.notifyCancel("screen-off")
             engine?.detach(CANCELLED_BY_SCREEN_OFF)
             scope.launch {
@@ -337,6 +520,7 @@ class P2PSession(context: Context) : ShareSessions {
             }
             resetConn(conn, reason, keepWaiter = false, closeTransport = false)
         }
+        markPeersQuiet()
         // 离线期间收不到 presence；把已知状态按离线算，
         // 解锁后灯塔重新推 online 时才会被当成「刚上线」触发自动重连
         _state.update { state ->
@@ -345,12 +529,13 @@ class P2PSession(context: Context) : ShareSessions {
         signal.close()
     }
 
-    /** 亮屏并解锁：重新连灯塔。对端还在线的话，presence 回来时会自动连回会话页。 */
+    /** 亮屏并解锁：重新连灯塔。对端还在线的话，presence 回来时静默连回会话页。 */
     private fun goOnline() {
         if (!screenOffline) return
         screenOffline = false
         log("屏幕已解锁，重新上线")
         signal.start()
+        if (appForeground && networkAvailable) resumeQuietly()
     }
 
     /* ---------------------------------------------------------- 设置 */
@@ -449,7 +634,7 @@ class P2PSession(context: Context) : ShareSessions {
                     incoming.from,
                     false,
                     "对方拒绝了配对",
-                    platform = PLATFORM_NATIVE,
+                    platform = PLATFORM_ANDROID,
                 ),
             )
             incomingPair = null
@@ -476,7 +661,7 @@ class P2PSession(context: Context) : ShareSessions {
         // 顺序和网页端一致：先写通讯录、先订阅，再回 pair-response。
         // 灯塔的 watch 是整体替换，不能只发新对端，否则其他联系人的在线状态不再更新。
         sendWatch()
-        signal.send(PairResponse(myId, incoming.from, true, platform = PLATFORM_NATIVE))
+        signal.send(PairResponse(myId, incoming.from, true, platform = PLATFORM_ANDROID))
         flushPending(incoming.from)
         connectPeer(incoming.from)
     }
@@ -503,6 +688,9 @@ class P2PSession(context: Context) : ShareSessions {
         conn?.autoRetryJob?.cancel()
         conn?.autoRetryJob = null
         conn?.autoRetries = 0
+        // 用户主动点进来，不再是静默恢复，过程可以正常显示
+        conn?.silent = false
+        conn?.permanentFailure = false
         connectPeer(peerId)
     }
 
@@ -516,12 +704,17 @@ class P2PSession(context: Context) : ShareSessions {
         conn.autoRetryJob?.cancel()
         conn.autoRetryJob = null
         conn.autoRetries = 0
+        conn.silent = false
+        conn.permanentFailure = false
         resetConn(conn, "已断开", keepWaiter = false)
         if (activePeerId == peerId) setActive(null)
     }
 
     fun forget(peerId: String) {
         disconnect(peerId)
+        // 排着的内容跟着配对一起清掉，别留在后台等一台已经不认识的设备
+        pendingTexts.remove(peerId)
+        pendingFiles.remove(peerId)
         contacts.remove(peerId)
         refreshContacts()
         _state.update {
@@ -593,11 +786,6 @@ class P2PSession(context: Context) : ShareSessions {
             }
         }
         return waiter
-    }
-
-    private suspend fun ensureConnected(peerId: String) {
-        if (conns[peerId]?.phase == SessionPhase.READY) return
-        connectPeer(peerId).await()
     }
 
     private fun armConnectTimeout(conn: Conn) {
@@ -785,9 +973,14 @@ class P2PSession(context: Context) : ShareSessions {
         conn.autoRetryJob?.cancel()
         conn.autoRetryJob = null
         conn.autoRetries = 0
+        // 连上了就不算「恢复中」：状态露出「已连接」，但不提示「重连过」
+        conn.silent = false
+        conn.permanentFailure = false
         setPhase(conn, SessionPhase.READY)
         log("连接就绪：${shortId(conn.peerId)}")
         ensureEngine(conn, link)
+        // 排队等连接的发送，现在可以按顺序补出去了
+        flushPendingSends(conn.peerId)
         if (conn.share == null) {
             setActive(conn.peerId)
             contacts.touch(conn.peerId, System.currentTimeMillis())
@@ -806,12 +999,38 @@ class P2PSession(context: Context) : ShareSessions {
         conn.timer = null
         resetConn(conn, reason, keepWaiter = true)
         val retry = shouldAutoRetry(conn, reason)
-        setPhase(conn, SessionPhase.FAILED, reason, autoRetrying = retry)
+        conn.permanentFailure = !retry
+        // 息屏/无网/后台/不在会话页时先不露失败；自动重连的前几次也算静默期
+        conn.silent = screenOffline ||
+            !networkAvailable ||
+            !appForeground ||
+            activePeerId != conn.peerId
         waiter?.completeExceptionally(IOException(reason))
-        // 会话页自己会写原因和「重试」；只有用户不在这一页时才弹提示
-        if (activePeerId != conn.peerId) emitError(reason)
-        if (retry) scheduleAutoRetry(conn)
+        if (!retry) {
+            // 认证失败这类没有重试意义，直接把原因留在会话页；不再往首页弹 snackbar
+            setPhase(conn, SessionPhase.FAILED, reason)
+            return
+        }
+        if (screenOffline || !networkAvailable) {
+            // 没网/息屏时不排退避，等亮屏或网络恢复的统一入口再来
+            setPhase(conn, SessionPhase.FAILED, "等网络恢复后自动重连", autoRetrying = true)
+            return
+        }
+        scheduleAutoRetry(conn)
     }
+
+    /**
+     * 这一轮失败要不要先藏起来。
+     *
+     * 静默期包括：息屏/无网、应用在后台、用户不在这一页，以及自动重连刚开始的
+     * 前几次。只有反复失败且用户正看着会话页时，才把可操作的失败横幅露出来。
+     */
+    private fun hideFailure(conn: Conn, attempt: Int): Boolean =
+        screenOffline ||
+            !networkAvailable ||
+            !appForeground ||
+            activePeerId != conn.peerId ||
+            attempt < QUIET_RETRY_LIMIT
 
     /**
      * 连接超时/断开这类瞬时失败才自动重试；认证失败、对方明确拒绝、
@@ -841,22 +1060,31 @@ class P2PSession(context: Context) : ShareSessions {
             attempt == 2 -> 2_000L
             else -> 5_000L
         }
+        // 前几次保持安静；次数到了或用户在会话页时，横幅才带着「第几次」露出来
+        conn.silent = hideFailure(conn, attempt)
         setPhase(
             conn,
             SessionPhase.FAILED,
-            "连接失败，${delayMs / 1000} 秒后自动重连（第 $attempt 次）",
+            "自动重连第 $attempt 次，${delayMs / 1000} 秒后再试",
             autoRetrying = true,
         )
         conn.autoRetryJob = scope.launch {
             delay(delayMs)
             if (conn.autoRetryJob !== coroutineContext[Job]) return@launch
             conn.autoRetryJob = null
+            if (screenOffline || !networkAvailable) {
+                // 息屏/无网期间不一遍遍撞墙，等系统状态恢复的统一入口
+                conn.silent = true
+                setPhase(conn, SessionPhase.FAILED, "等网络恢复后自动重连", autoRetrying = true)
+                return@launch
+            }
             val stillWanted =
                 conn.phase == SessionPhase.FAILED &&
                     conn.rtc == null &&
                     conn.waiter == null &&
                     _state.value.presence[conn.peerId] != false
             if (!stillWanted) return@launch
+            conn.silent = hideFailure(conn, attempt)
             log("自动重连 ${shortId(conn.peerId)}（第 $attempt 次）")
             connectPeer(conn.peerId)
         }
@@ -868,6 +1096,7 @@ class P2PSession(context: Context) : ShareSessions {
         conn.autoRetryJob?.cancel()
         conn.autoRetryJob = null
         conn.autoRetries = 0
+        conn.silent = false
         if (conn.phase == SessionPhase.FAILED) {
             setPhase(conn, SessionPhase.FAILED, "已取消自动重连，可以点重试")
         }
@@ -915,7 +1144,13 @@ class P2PSession(context: Context) : ShareSessions {
                 return@launch
             }
             setActive(peerId)
-            val items = files.map { file ->
+            if (contacts.get(peerId) == null) {
+                emitError("这台设备还没有配对记录")
+                return@launch
+            }
+            // 先占位显示「排队中」，连接没就绪也不报错；连上后由 flushPendingSends 补发。
+            val queue = pendingFiles.getOrPut(peerId) { mutableListOf() }
+            for (file in files) {
                 val id = newTransferId()
                 addTransfer(
                     TransferItem(
@@ -927,44 +1162,141 @@ class P2PSession(context: Context) : ShareSessions {
                         mime = file.mime,
                     ),
                 )
-                id to file
+                queue.add(PendingFile(id, file))
             }
-            try {
-                ensureConnected(peerId)
-                val engine = conns[peerId]?.engine ?: throw IOException("连接还没有准备好")
-                for ((id, file) in items) engine.enqueue(id, file)
-            } catch (t: Throwable) {
-                val reason = t.message ?: "发送失败"
-                for ((id, _) in items) {
-                    updateTransfer(id) {
-                        it.copy(status = TransferStatus.ERROR, message = reason)
-                    }
-                }
-                emitError(reason)
-            }
+            kickPending(peerId)
         }
     }
 
+    /**
+     * 发文字。
+     *
+     * 连接没就绪（息屏刚回来、断网重连中、对方还没上线）时先排住，界面照常出现
+     * 气泡并标成待发送；连上后自动补发，不再把用户挡在「连接后才能发送」外面。
+     */
     fun sendText(peerId: String, text: String) {
         val clean = text.trim()
         if (clean.isEmpty()) return
         scope.launch {
             setActive(peerId)
-            try {
-                ensureConnected(peerId)
-                val engine = conns[peerId]?.engine ?: throw IOException("连接还没有准备好")
-                if (!engine.sendText(clean)) throw IOException("连接已关闭")
-                addText(
-                    TextItem(
-                        id = newTransferId(),
-                        peerId = peerId,
-                        direction = Direction.OUT,
-                        text = clean,
-                    ),
-                )
-            } catch (t: Throwable) {
-                emitError(t.message ?: "发送失败")
+            if (contacts.get(peerId) == null) {
+                emitError("这台设备还没有配对记录")
+                return@launch
             }
+            val id = newTransferId()
+            addText(
+                TextItem(
+                    id = id,
+                    peerId = peerId,
+                    direction = Direction.OUT,
+                    text = clean,
+                    delivery = TextDelivery.QUEUED,
+                ),
+            )
+            pendingTexts.getOrPut(peerId) { mutableListOf() }.add(PendingText(id, clean))
+            kickPending(peerId)
+        }
+    }
+
+    /** 用户点气泡旁的「重发」：同一段文字重新排队，id 不变，等新的 text-ack。 */
+    fun retryText(peerId: String, id: String) {
+        val item = _state.value.texts.firstOrNull { it.id == id && it.peerId == peerId } ?: return
+        if (item.direction != Direction.OUT) return
+        val queue = pendingTexts.getOrPut(peerId) { mutableListOf() }
+        if (queue.any { it.id == id }) return
+        textAckJobs.remove(id)?.cancel()
+        updateText(id) { it.copy(delivery = TextDelivery.QUEUED) }
+        queue.add(PendingText(id, item.text))
+        kickPending(peerId)
+    }
+
+    /** 对端确认收到某条文字；不认识的 id 直接忽略。 */
+    private fun markTextDelivered(id: String) {
+        textAckJobs.remove(id)?.cancel()
+        updateText(id) { item ->
+            if (item.direction == Direction.OUT) item.copy(delivery = TextDelivery.DELIVERED) else item
+        }
+    }
+
+    /** 等 text-ack 最多 8 秒；超时只把这一条标成未确认，不弹全局错误。 */
+    private fun armTextAck(id: String) {
+        textAckJobs.remove(id)?.cancel()
+        textAckJobs[id] = scope.launch {
+            delay(TEXT_ACK_TIMEOUT_MS)
+            textAckJobs.remove(id)
+            updateText(id) { item ->
+                if (item.direction == Direction.OUT && item.delivery == TextDelivery.SENDING) {
+                    item.copy(delivery = TextDelivery.UNCONFIRMED)
+                } else {
+                    item
+                }
+            }
+        }
+    }
+
+    /** 有排队内容时踢一下连接：已经连着就直接发，没连着就静默去连。 */
+    private fun kickPending(peerId: String) {
+        flushPendingSends(peerId)
+        if (!hasPending(peerId)) return
+        if (screenOffline || !networkAvailable) return
+        val conn = conns[peerId] ?: return
+        if (conn.phase == SessionPhase.READY) {
+            // 状态还是「已连接」但写不进去，说明链路其实已经断了：按断线走自动重连
+            failConn(conn, "连接已断开")
+            return
+        }
+        if (conn.waiter != null) return
+        if (conn.permanentFailure) return
+        if (contacts.get(peerId) == null) return
+        if (_state.value.presence[peerId] == false) return
+        // 用户刚点了发送，连接过程不用弹失败；连上就自动发出去
+        conn.silent = true
+        connectPeer(peerId)
+    }
+
+    private fun hasPending(peerId: String): Boolean =
+        !pendingTexts[peerId].isNullOrEmpty() || !pendingFiles[peerId].isNullOrEmpty()
+
+    /**
+     * 连接就绪后补发排队的内容。
+     *
+     * 文字先发，用户最关心它；文件只是交给传输引擎排队，真正的分片由引擎自己按序走。
+     * 写进数据通道的文字标成「等确认」并起 8 秒计时，收到 text-ack 才算送达；
+     * 链路又断了就留在队列里等下一次重连。
+     *
+     * @return 队列是否已经清空。false 表示链路还不能写，调用方要按断线处理。
+     */
+    private fun flushPendingSends(peerId: String): Boolean {
+        val conn = conns[peerId] ?: return false
+        if (conn.phase != SessionPhase.READY) return false
+        val engine = conn.engine ?: return false
+        // 链路状态比 phase 更早失效，这里挡一次，免得文件塞进马上要被拆掉的引擎
+        if (conn.link?.state != PeerState.CONNECTED) return false
+        var sent = 0
+        val texts = pendingTexts[peerId] ?: mutableListOf()
+        while (texts.isNotEmpty()) {
+            val next = texts.first()
+            if (!engine.sendText(next.text)) break
+            texts.removeAt(0)
+            sent += 1
+            updateText(next.id) { it.copy(delivery = TextDelivery.SENDING) }
+            armTextAck(next.id)
+        }
+        if (texts.isEmpty()) pendingTexts.remove(peerId)
+        val files = pendingFiles[peerId] ?: mutableListOf()
+        val fileCount = files.size
+        for (next in files) engine.enqueue(next.id, next.file)
+        files.clear()
+        pendingFiles.remove(peerId)
+        if (sent > 0 || fileCount > 0) {
+            log("连接恢复，补发 $sent 条文字、$fileCount 个文件")
+        }
+        return !hasPending(peerId)
+    }
+
+    private fun updateText(id: String, block: (TextItem) -> TextItem) {
+        _state.update { state ->
+            state.copy(texts = state.texts.map { if (it.id == id) block(it) else it })
         }
     }
 
@@ -1279,7 +1611,7 @@ class P2PSession(context: Context) : ShareSessions {
                 code = message.code,
                 name = settings.deviceName,
                 publicKey = identity.publicJwk,
-                platform = PLATFORM_NATIVE,
+                platform = PLATFORM_ANDROID,
             ),
         )
     }
@@ -1294,7 +1626,7 @@ class P2PSession(context: Context) : ShareSessions {
                     message.from,
                     false,
                     "对方屏幕已关闭，稍后再试",
-                    platform = PLATFORM_NATIVE,
+                    platform = PLATFORM_ANDROID,
                 ),
             )
             return
@@ -1308,7 +1640,7 @@ class P2PSession(context: Context) : ShareSessions {
                     message.from,
                     false,
                     "这个配对码不是我发出去的",
-                    platform = PLATFORM_NATIVE,
+                    platform = PLATFORM_ANDROID,
                 ),
             )
             return
@@ -1321,7 +1653,7 @@ class P2PSession(context: Context) : ShareSessions {
                     message.from,
                     false,
                     "配对码已经换过了，让对方用屏幕上新的那个",
-                    platform = PLATFORM_NATIVE,
+                    platform = PLATFORM_ANDROID,
                 ),
             )
             return
@@ -1333,7 +1665,7 @@ class P2PSession(context: Context) : ShareSessions {
                     message.from,
                     false,
                     "设备号和公钥对不上",
-                    platform = PLATFORM_NATIVE,
+                    platform = PLATFORM_ANDROID,
                 ),
             )
             return
@@ -1491,15 +1823,20 @@ class P2PSession(context: Context) : ShareSessions {
 
         override fun onText(id: String, text: String) {
             scope.launch {
-                addText(
-                    TextItem(
-                        id = id,
-                        peerId = peerId,
-                        direction = Direction.IN,
-                        text = text,
-                    ),
+                val item = TextItem(
+                    id = id,
+                    peerId = peerId,
+                    direction = Direction.IN,
+                    text = text,
                 )
+                addText(item)
+                // 界面按这条通知自动跳到会话页；同一条消息只跳一次
+                _state.update { it.copy(incomingText = item) }
             }
+        }
+
+        override fun onTextAck(id: String) {
+            scope.launch { markTextDelivered(id) }
         }
 
         override fun onArtifact(id: String, artifact: dev.p2pshare.app.core.ReceivedArtifact) {
@@ -1627,19 +1964,21 @@ class P2PSession(context: Context) : ShareSessions {
     /**
      * 对端重新上线，而用户正好停在这台的会话页：静默重连。
      *
-     * 失败态和「对方离线、还没开始连」两种情况都算。只重试 [MAX_AUTO_RETRIES] 次，
-     * 再失败就把文案换成「对方已上线，点重试」，免得两边网络都不稳时无限重连。
+     * 失败态和「对方离线、还没开始连」两种情况都算。重连过程先藏着，连上后
+     * 不提示「重连过」；只有反复失败且用户还在这一页时，才会露出可操作的横幅。
      * 用户自己点设备或点重试会清空计数。
      */
     private fun maybeAutoReconnect(peerId: String) {
         if (activePeerId != peerId) return
         val conn = conns[peerId] ?: return
         if (conn.phase != SessionPhase.FAILED && conn.phase != SessionPhase.IDLE) return
+        if (conn.permanentFailure) return
         if (contacts.get(peerId) == null) return
         // 对端重新上线：从第一档退避重新开始，自动连到用户取消为止
         conn.autoRetryJob?.cancel()
         conn.autoRetryJob = null
         conn.autoRetries = 0
+        conn.silent = true
         setPhase(conn, SessionPhase.FAILED, "对方已上线，正在自动重连", autoRetrying = true)
         scheduleAutoRetry(conn)
     }
@@ -1660,13 +1999,26 @@ class P2PSession(context: Context) : ShareSessions {
         autoRetrying: Boolean = false,
     ) {
         conn.phase = phase
+        val quiet = phase != SessionPhase.READY && conn.silent
         _state.update {
-            it.copy(peers = it.peers + (conn.peerId to PeerUi(phase, message, autoRetrying)))
+            it.copy(
+                peers = it.peers + (
+                    conn.peerId to PeerUi(
+                        phase = phase,
+                        message = message,
+                        autoRetrying = autoRetrying,
+                        quiet = quiet,
+                        retryAttempt = if (phase == SessionPhase.FAILED) conn.autoRetries else 0,
+                    )
+                    ),
+            )
         }
     }
 
     private fun emitError(message: String) {
         log("错误：$message")
+        // 息屏、无网期间不弹错误，免得解锁回来看到一串过期的红字
+        if (screenOffline || !networkAvailable) return
         _state.update { it.copy(error = UiError(System.nanoTime(), message)) }
     }
 
@@ -1707,7 +2059,17 @@ class P2PSession(context: Context) : ShareSessions {
         /** 自动重连已经用掉几次；连上或用户手动重试时清零 */
         var autoRetries = 0
         var autoRetryJob: Job? = null
+        /** 静默恢复中：失败横幅先不显示，连上也不提示「重连过」 */
+        var silent = false
+        /** 重试也没用的失败（认证、没有配对记录等）：不再自动重连，等用户点重试 */
+        var permanentFailure = false
     }
+
+    /** 断网/重连期间排住的文字 */
+    private data class PendingText(val id: String, val text: String)
+
+    /** 断网/重连期间排住的文件 */
+    private data class PendingFile(val id: String, val file: UriSendFile)
 
     private data class OutgoingPair(
         val peerId: String,
@@ -1734,10 +2096,10 @@ class P2PSession(context: Context) : ShareSessions {
         const val BUFFER_TTL_MS = 30_000L
         const val MAX_PENDING_ICE = 64
         const val MAX_LOGS = 200
-        /** 对端上线后最多自动重连几次；超过就交给用户点重试 */
-        const val MAX_AUTO_RETRIES = 2
-        const val AUTO_RETRY_FIRST_MS = 800L
-        const val AUTO_RETRY_NEXT_MS = 2_500L
+        /** 自动重连前几次都保持静默，超过这个次数并且用户正看着会话页才露出失败横幅 */
+        const val QUIET_RETRY_LIMIT = 3
+        /** 等对方 text-ack 的时限；超时只标「未确认」，老对端不回 ack 也不会报错 */
+        const val TEXT_ACK_TIMEOUT_MS = 8_000L
         /** 网页端联系人离线多久后自动移除。验收时可以临时改成 10_000L 看效果 */
         const val WEB_CONTACT_TTL_MS = 10 * 60_000L
         /** 定时清理的间隔上限 */

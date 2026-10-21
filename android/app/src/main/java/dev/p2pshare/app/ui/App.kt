@@ -52,6 +52,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.p2pshare.app.core.parseShareToken
@@ -81,6 +84,40 @@ fun P2PShareApp(
     var shareInput by rememberSaveable { mutableStateOf("") }
     val systemDark = isSystemInDarkTheme()
     val darkTheme = ThemeController.isDark(systemDark)
+
+    // 应用是否在前台。后台收到文字不抢页面，连接失败也不弹；回到前台再静默恢复。
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var foreground by remember {
+        mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
+    }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        foreground = true
+        viewModel.setForeground(true)
+    }
+    LifecycleEventEffect(Lifecycle.Event.ON_PAUSE) {
+        foreground = false
+        viewModel.setForeground(false)
+    }
+
+    // Windows 端点「粘贴给对方」发来文字：前台且没有弹窗流程时，直接带到对应会话页。
+    // 已经停在这台设备的会话页、或者在配对/取件/设置/分享/菜单里，都不打断。
+    LaunchedEffect(state.incomingText?.id) {
+        val notice = state.incomingText ?: return@LaunchedEffect
+        if (!foreground) return@LaunchedEffect
+        val modal = showJoin ||
+            showSettings ||
+            showLogs ||
+            showMenu ||
+            showShare ||
+            state.advertising ||
+            state.pairing != null ||
+            state.visit != null
+        if (modal) return@LaunchedEffect
+        if (state.activePeerId == notice.peerId) return@LaunchedEffect
+        // 只跳已配对设备；公开分享的访客没有会话页
+        if (state.contacts.none { it.peerId == notice.peerId }) return@LaunchedEffect
+        viewModel.connect(notice.peerId)
+    }
 
     // 主题切换：拍下当前这一帧，再从按钮位置把它裁开/收回，制造圆形转场
     val view = LocalView.current
@@ -231,10 +268,12 @@ fun P2PShareApp(
                         peerId = peerId,
                         onBack = { viewModel.background(peerId) },
                         onRetry = { viewModel.retry(peerId) },
+                        onCancelReconnect = { viewModel.cancelReconnect(peerId) },
                         onCancel = { viewModel.disconnect(peerId) },
                         onForget = { viewModel.forget(peerId) },
                         onSendFiles = { uris -> viewModel.sendFiles(peerId, uris) },
                         onSendText = { text -> viewModel.sendText(peerId, text) },
+                        onRetryText = { id -> viewModel.retryText(peerId, id) },
                         onOpenFile = { uri, mime -> openReceived(context, uri, mime) },
                     )
                 }

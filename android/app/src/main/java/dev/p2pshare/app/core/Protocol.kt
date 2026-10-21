@@ -94,9 +94,13 @@ data class CodeMiss(
  * 对端跑在什么环境里。网页端的身份只活在页面里，刷新就换一台设备，
  * 所以这条配对记录本质上是一次性的；原生端身份存在密钥库里，可以长期保留。
  *
- * 旧版本不带这个字段，读出来就是空串，界面按「端未知」显示，不瞎猜。
+ * 新版本各端会明确发 android / windows。旧版 Windows 端只会发 "native"，
+ * 界面按电脑端处理；旧版配对完全没有这个字段，读出来是空串，按「端未知」显示。
  */
 const val PLATFORM_WEB = "web"
+const val PLATFORM_ANDROID = "android"
+const val PLATFORM_WINDOWS = "windows"
+/** 旧版本 Windows 端发的标记，保留兼容 */
 const val PLATFORM_NATIVE = "native"
 
 @Serializable
@@ -207,6 +211,16 @@ data class Cancel(val id: String? = null, val reason: String? = null) : ControlM
 @Serializable
 @SerialName("text")
 data class TextMessage(val id: String, val text: String) : ControlMessage
+
+/**
+ * 文字送达确认。
+ *
+ * 收到 text 的对端回一条同样 id 的 text-ack；发送方收到才算送达。老版本对端
+ * 不认识这个帧会忽略，发送方按 8 秒超时标成「未确认」，不当作错误。
+ */
+@Serializable
+@SerialName("text-ack")
+data class TextAck(val id: String) : ControlMessage
 
 @Serializable
 @SerialName("error")

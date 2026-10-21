@@ -32,6 +32,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun connect(peerId: String) = session.connect(peerId)
     fun retry(peerId: String) = session.connect(peerId)
+    fun cancelReconnect(peerId: String) = session.cancelReconnect(peerId)
+    /** 前后台切换：后台时连接失败先不弹，回前台静默恢复 */
+    fun setForeground(foreground: Boolean) = session.setForeground(foreground)
     fun pruneContacts() = session.pruneContacts()
     fun background(peerId: String) = session.background(peerId)
     fun disconnect(peerId: String) = session.disconnect(peerId)
@@ -39,6 +42,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun sendFiles(peerId: String, uris: List<Uri>) = session.sendFiles(peerId, uris)
     fun sendText(peerId: String, text: String) = session.sendText(peerId, text)
+    fun retryText(peerId: String, id: String) = session.retryText(peerId, id)
 
     fun createShare(uri: Uri) = session.createShare(uri)
     fun shareFiles(uris: List<Uri>) = session.shareSharedFiles(uris)

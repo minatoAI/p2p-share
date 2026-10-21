@@ -24,6 +24,7 @@ import androidx.compose.material.icons.rounded.HelpOutline
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.InsertDriveFile
 import androidx.compose.material.icons.rounded.Language
+import androidx.compose.material.icons.rounded.Laptop
 import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.PictureAsPdf
@@ -48,8 +49,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.p2pshare.app.core.PLATFORM_ANDROID
 import dev.p2pshare.app.core.PLATFORM_NATIVE
 import dev.p2pshare.app.core.PLATFORM_WEB
+import dev.p2pshare.app.core.PLATFORM_WINDOWS
 import dev.p2pshare.app.core.SignalLinkState
 import java.time.Instant
 import java.time.ZoneId
@@ -317,11 +320,13 @@ fun SmallChip(text: String, icon: ImageVector? = null, tint: Color = MaterialThe
 }
 
 /**
- * 配对记录是网页端还是原生端。
+ * 配对记录来自哪种端。
  *
  * 网页端的身份只活在当前页面里，刷新就换一台设备，所以这条记录只能算一次性的；
- * 原生端把私钥放在系统密钥库里，配对可以一直用下去。旧版本配对没有这个字段，
- * 这里如实写「未标注」，不猜。
+ * 原生端把私钥放在系统密钥库里，配对可以一直用下去。
+ *
+ * 新版本会明确发 android / windows：安卓用手机图标、Windows 用笔记本图标。
+ * 旧版 Windows 端只发 "native"，同样按电脑端显示，不能让它看起来像手机。
  */
 @Composable
 fun PlatformBadge(platform: String?, compact: Boolean = false) {
@@ -332,9 +337,15 @@ fun PlatformBadge(platform: String?, compact: Boolean = false) {
             Icons.Rounded.Language,
             scheme.secondary,
         )
-        PLATFORM_NATIVE -> Triple(
-            if (compact) "原生端" else "原生端 · 持续",
+        PLATFORM_ANDROID -> Triple(
+            if (compact) "安卓端" else "安卓端 · 持续",
             Icons.Rounded.Smartphone,
+            scheme.primary,
+        )
+        // 老版本 Windows 只发 native，按电脑处理
+        PLATFORM_WINDOWS, PLATFORM_NATIVE -> Triple(
+            if (compact) "Windows" else "Windows 端 · 电脑",
+            Icons.Rounded.Laptop,
             scheme.primary,
         )
         else -> Triple(
@@ -367,8 +378,10 @@ fun PlatformBadge(platform: String?, compact: Boolean = false) {
 
 fun platformExplanation(platform: String?): String = when (platform) {
     PLATFORM_WEB -> "对方是网页端。网页身份只在这一页有效，刷新后这条配对就会失效，可以优先删除。"
-    PLATFORM_NATIVE -> "对方是原生端。身份保存在系统里，这条配对会长期保留，不用每次重配。"
-    else -> "这条记录来自旧版本，无法确定对方是网页端还是原生端。可以删掉后重新配对一次。"
+    PLATFORM_ANDROID -> "对方是安卓端。身份保存在系统里，这条配对会长期保留，不用每次重配。"
+    PLATFORM_WINDOWS, PLATFORM_NATIVE ->
+        "对方是 Windows 电脑。身份保存在系统里，这条配对会长期保留，不用每次重配。"
+    else -> "这条记录来自旧版本，无法确定对方是什么端。可以删掉后重新配对一次。"
 }
 
 @Composable
