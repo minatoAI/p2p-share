@@ -82,3 +82,13 @@ SCTP 在同样的 RTT 下受拥塞窗口和缓冲影响更明显。
 - TLS 1.3 加密后仍有 16.4 / 21.3 MB/s，说明“局域网 TCP/TLS 直连”是可行备选；
 - 继续调 App 层分片/缓冲/落盘收益很小（实测在噪声内），要明显提升需要换传输方式
   （局域网 TCP/TLS 直连、QUIC，或 Android 上可调 SCTP 缓冲的 libdatachannel）。
+
+## 其他备选验证到哪一步
+
+- **libdatachannel**：Windows 原生端已经在用，`native-cpp/tools/throughput.cpp` 回环
+  128 MB / 16 MB SCTP 缓冲实测 128.6 MB/s（3.44 核，两端同进程），说明桌面侧协议栈
+  本身能跑满千兆；Android 侧换 libdatachannel 需要 NDK/JNI，本轮没有环境，未验证。
+- **QUIC**：没有现成实现，未做数据；按 `docs/14-传输协议演进路线.md` 的结论，
+  它适合多千兆/高 RTT/连接迁移，不适合为了当前千兆 WiFi 的速度去换。
+- **局域网 TCP/TLS**：本轮已验证，手机→电脑 16.4 MB/s，电脑→手机 21.3 MB/s，
+  是当前最接近物理上限、落地成本最低的备选。
