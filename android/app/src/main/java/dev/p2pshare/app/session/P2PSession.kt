@@ -805,16 +805,72 @@ class P2PSession(context: Context) : ShareSessions {
         conn.timer?.cancel()
         conn.timer = null
         resetConn(conn, reason, keepWaiter = true)
-        // 自动重连的次数用完了，就把失败文案换成用户能执行的下一步
-        val hint = if (conn.autoRetries >= MAX_AUTO_RETRIES && _state.value.presence[conn.peerId] == true) {
-            "对方已上线，点重试"
-        } else {
-            reason
-        }
-        setPhase(conn, SessionPhase.FAILED, hint)
+        val retry = shouldAutoRetry(conn, reason)
+        setPhase(conn, SessionPhase.FAILED, reason, autoRetrying = retry)
         waiter?.completeExceptionally(IOException(reason))
         // 会话页自己会写原因和「重试」；只有用户不在这一页时才弹提示
         if (activePeerId != conn.peerId) emitError(reason)
+        if (retry) scheduleAutoRetry(conn)
+    }
+
+    /**
+     * 连接超时/断开这类瞬时失败才自动重试；认证失败、对方明确拒绝、
+     * 没有配对记录这些重试多少次都一样，直接把决定权交回用户。
+     */
+    private fun shouldAutoRetry(conn: Conn, reason: String): Boolean {
+        if (conn.share != null) return true
+        if (contacts.get(conn.peerId) == null) return false
+        if (_state.value.presence[conn.peerId] == false) return false
+        val permanent = listOf("认证", "签名", "公钥", "配对记录", "拒绝", "还没有配对", "对端既不在")
+        if (permanent.any { reason.contains(it) }) return false
+        return true
+    }
+
+    /**
+     * 失败后自动重连，直到连上、用户取消或用户手动断开。
+     *
+     * 退避封顶 5 秒：手机刚解锁时网络常常还没就绪，固定间隔会一直撞在
+     * "还没网"上；封顶之后既能持续尝试，也不会把电池和日志刷爆。
+     */
+    private fun scheduleAutoRetry(conn: Conn) {
+        if (conn.autoRetryJob?.isActive == true) return
+        conn.autoRetries += 1
+        val attempt = conn.autoRetries
+        val delayMs = when {
+            attempt <= 1 -> 1_000L
+            attempt == 2 -> 2_000L
+            else -> 5_000L
+        }
+        setPhase(
+            conn,
+            SessionPhase.FAILED,
+            "连接失败，${delayMs / 1000} 秒后自动重连（第 $attempt 次）",
+            autoRetrying = true,
+        )
+        conn.autoRetryJob = scope.launch {
+            delay(delayMs)
+            if (conn.autoRetryJob !== coroutineContext[Job]) return@launch
+            conn.autoRetryJob = null
+            val stillWanted =
+                conn.phase == SessionPhase.FAILED &&
+                    conn.rtc == null &&
+                    conn.waiter == null &&
+                    _state.value.presence[conn.peerId] != false
+            if (!stillWanted) return@launch
+            log("自动重连 ${shortId(conn.peerId)}（第 $attempt 次）")
+            connectPeer(conn.peerId)
+        }
+    }
+
+    /** 用户点「取消重连」：停下循环，把重试按钮还给用户。 */
+    fun cancelReconnect(peerId: String) {
+        val conn = conns[peerId] ?: return
+        conn.autoRetryJob?.cancel()
+        conn.autoRetryJob = null
+        conn.autoRetries = 0
+        if (conn.phase == SessionPhase.FAILED) {
+            setPhase(conn, SessionPhase.FAILED, "已取消自动重连，可以点重试")
+        }
     }
 
     /** 拆掉一个对端的所有连接资源。generation 一变，旧链路的迟到回调就全部作废。 */
@@ -1580,27 +1636,12 @@ class P2PSession(context: Context) : ShareSessions {
         val conn = conns[peerId] ?: return
         if (conn.phase != SessionPhase.FAILED && conn.phase != SessionPhase.IDLE) return
         if (contacts.get(peerId) == null) return
-        if (conn.autoRetries >= MAX_AUTO_RETRIES) {
-            setPhase(conn, SessionPhase.FAILED, "对方已上线，点重试")
-            return
-        }
-        conn.autoRetries += 1
-        val attempt = conn.autoRetries
-        val delayMs = if (attempt == 1) AUTO_RETRY_FIRST_MS else AUTO_RETRY_NEXT_MS
-        log("对方上线，${delayMs / 1000} 秒后自动重连（第 $attempt 次）")
+        // 对端重新上线：从第一档退避重新开始，自动连到用户取消为止
         conn.autoRetryJob?.cancel()
-        conn.autoRetryJob = scope.launch {
-            delay(delayMs)
-            if (activePeerId == peerId &&
-                (conn.phase == SessionPhase.FAILED || conn.phase == SessionPhase.IDLE) &&
-                conn.rtc == null &&
-                conn.waiter == null &&
-                _state.value.presence[peerId] == true
-            ) {
-                log("自动重连 ${shortId(peerId)}")
-                connectPeer(peerId)
-            }
-        }
+        conn.autoRetryJob = null
+        conn.autoRetries = 0
+        setPhase(conn, SessionPhase.FAILED, "对方已上线，正在自动重连", autoRetrying = true)
+        scheduleAutoRetry(conn)
     }
 
     private fun refreshContacts() {
@@ -1612,9 +1653,16 @@ class P2PSession(context: Context) : ShareSessions {
         _state.update { it.copy(activePeerId = peerId) }
     }
 
-    private fun setPhase(conn: Conn, phase: SessionPhase, message: String? = null) {
+    private fun setPhase(
+        conn: Conn,
+        phase: SessionPhase,
+        message: String? = null,
+        autoRetrying: Boolean = false,
+    ) {
         conn.phase = phase
-        _state.update { it.copy(peers = it.peers + (conn.peerId to PeerUi(phase, message))) }
+        _state.update {
+            it.copy(peers = it.peers + (conn.peerId to PeerUi(phase, message, autoRetrying)))
+        }
     }
 
     private fun emitError(message: String) {

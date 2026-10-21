@@ -432,6 +432,12 @@ void Session::disconnect_peer() {
     push(std::move(request));
 }
 
+void Session::cancel_pairing() {
+    Request request;
+    request.command = Command::CancelPair;
+    push(std::move(request));
+}
+
 void Session::handle_presence(const json& msg) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -780,6 +786,14 @@ void Session::signal_loop() {
                         teardown_peer("已断开");
                         break;
                     }
+                    case Command::CancelPair: {
+                        has_pending_key_ = false;
+                        outgoing_code_.clear();
+                        join_deadline_ms_ = 0;
+                        emit_(json{{"t", "pair-hide"}});
+                        emit_state("ready", "已取消配对");
+                        break;
+                    }
                     case Command::RemoveContact: {
                         const auto it = std::find_if(
                             contacts_.begin(), contacts_.end(),
@@ -944,6 +958,12 @@ void Session::signal_loop() {
                     emit_state("error", "对方的公钥和设备号对不上，可能有中间人");
                     continue;
                 }
+                const std::string join_sas =
+                    p2p::short_authentication_string(identity_.public_jwk(), peer_key);
+                emit_(json{{"t", "pair-show"},
+                           {"id", peer_id},
+                           {"name", peer_name},
+                           {"sas", join_sas}});
                 link_->send(json{{"t", "pair-request"},
                                  {"from", my_id},
                                  {"to", peer_id},
@@ -961,6 +981,7 @@ void Session::signal_loop() {
             // 这个分支以前没有，于是"对方不在线"变成了一条什么都不显示的死等，
             // 查了很久才看出来。凡是灯塔说的错都要说出来。
             if (t == "error") {
+                emit_(json{{"t", "pair-hide"}});
                 const std::string message = msg.value("message", "灯塔报了个错");
                 std::printf("[会话] 灯塔报错：%s（%s）\n", message.c_str(),
                             msg.value("code", "").c_str());
@@ -969,6 +990,7 @@ void Session::signal_loop() {
                 continue;
             }
             if (t == "code-miss") {
+                emit_(json{{"t", "pair-hide"}});
                 const std::string reason = msg.value("reason", "");
                 const int64_t retry = msg.value("retryAfterMs", 0LL);
                 std::printf("[会话] 配对码没找到：%s\n", reason.c_str());
@@ -1039,6 +1061,7 @@ void Session::signal_loop() {
                 continue;
             }
             if (t == "pair-response") {
+                emit_(json{{"t", "pair-hide"}});
                 join_deadline_ms_ = 0;
                 if (!msg.value("accepted", false)) {
                     const std::string reason = msg.value("reason", "");

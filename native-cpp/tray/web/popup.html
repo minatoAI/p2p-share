@@ -138,7 +138,7 @@
           </div>
           <button class="btn primary wide" id="pairGo">连接</button>
           <div class="or"><span>或者</span></div>
-          <button class="btn secondary wide" id="pairScan">让对方输入我的配对码</button>
+          <button class="btn secondary wide" id="pairScan">让对方连我</button>
           <div class="my-code" id="myCodeBox" hidden>
             <span class="my-code-label">我的配对码</span>
             <span class="my-code-value" id="myCode">------</span>
@@ -148,7 +148,7 @@
             </div>
             <div class="code-links">
               <button class="pair-link" id="copyPairLink" hidden>复制配对链接</button>
-              <button class="pair-link" id="backToInput">改用对方的码</button>
+              <button class="pair-link" id="backToInput">我来连对方</button>
             </div>
           </div>
         </div>
@@ -227,9 +227,9 @@
 
     <div class="modal" id="pairModal" hidden>
       <div class="modal-card">
-        <div class="modal-kicker">配对请求</div>
+        <div class="modal-kicker" id="pairAskKicker">配对请求</div>
         <div class="modal-title" id="pairAskName">对方设备</div>
-        <p class="modal-desc">两边屏幕上的核对数字要一致。不一致说明可能有人在中间换钥匙。</p>
+        <p class="modal-desc" id="pairAskDesc">两边屏幕上的核对数字要一致。不一致说明可能有人在中间换钥匙。</p>
         <div class="modal-sas" id="pairAskSas">000 000</div>
         <div class="modal-actions">
           <button class="btn secondary" id="pairReject">不一致</button>

@@ -6,6 +6,7 @@ const MAX_SHARES_PER_DEVICE = 20;
 
 interface ShareRow extends Record<string, SqlStorageValue> {
   token: string;
+  code: string | null;
   device_id: string;
   device_name: string;
   public_key: string | null;
@@ -69,6 +70,19 @@ export class RegistryDO implements DurableObject {
     } catch {
       /* 列已经在了 */
     }
+    // 短编号是后来加的。老条目按 token 末 8 位补上；重复的留给唯一索引报错，
+    // 正常数据里 16^8 的碰撞概率可以忽略。
+    try {
+      this.sql.exec(`ALTER TABLE shares ADD COLUMN code TEXT`);
+    } catch {
+      /* 列已经在了 */
+    }
+    this.sql.exec(`UPDATE shares SET code = substr(token, -8) WHERE code IS NULL`);
+    try {
+      this.sql.exec(`CREATE UNIQUE INDEX IF NOT EXISTS shares_by_code ON shares(code)`);
+    } catch {
+      /* 历史数据有碰撞就先不用唯一索引，查询仍按 code 找 */
+    }
     this.sql.exec(`CREATE INDEX IF NOT EXISTS shares_by_device ON shares(device_id);`);
   }
 
@@ -113,10 +127,16 @@ export class RegistryDO implements DurableObject {
       return json({ error: 'too-many-shares', limit: MAX_SHARES_PER_DEVICE }, 429);
     }
 
-    const token = hex(16);
+    let token = hex(16);
+    let code = token.slice(-8);
+    for (let i = 0; i < 8 && this.rowByCode(code); ++i) {
+      token = hex(16);
+      code = token.slice(-8);
+    }
     const expiresAt = now + (body.ttlMs ?? SHARE_TTL_MS);
     const record: ShareRecord = {
       token,
+      code,
       deviceId,
       deviceName: String(body.deviceName ?? '未命名设备'),
       // 公钥可以缺：旧客户端不送，服务端不该因为少一个字段就把分享拒掉。
@@ -131,9 +151,10 @@ export class RegistryDO implements DurableObject {
       expiresAt,
     };
     this.sql.exec(
-      `INSERT INTO shares (token, device_id, device_name, public_key, name, size, mime, state, created_at, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO shares (token, code, device_id, device_name, public_key, name, size, mime, state, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       record.token,
+      record.code,
       record.deviceId,
       record.deviceName,
       JSON.stringify(record.publicKey),
@@ -175,6 +196,7 @@ export class RegistryDO implements DurableObject {
     return json(
       rows.map((r) => ({
         token: r.token,
+        code: r.code ?? r.token.slice(-8),
         name: r.name,
         size: r.size,
         mime: r.mime,
@@ -197,8 +219,14 @@ export class RegistryDO implements DurableObject {
     return json({ ok: true, removed: removed.rowsWritten });
   }
 
-  private row(token: string): ShareRow | undefined {
-    return this.sql.exec<ShareRow>(`SELECT * FROM shares WHERE token = ?`, token).toArray()[0];
+  private row(id: string): ShareRow | undefined {
+    return this.sql
+      .exec<ShareRow>(`SELECT * FROM shares WHERE token = ? OR code = ?`, id, id)
+      .toArray()[0];
+  }
+
+  private rowByCode(code: string): ShareRow | undefined {
+    return this.sql.exec<ShareRow>(`SELECT * FROM shares WHERE code = ?`, code).toArray()[0];
   }
 
   private recordOf(row: ShareRow): ShareRecord {
@@ -212,6 +240,7 @@ export class RegistryDO implements DurableObject {
     }
     return {
       token: row.token,
+      code: row.code ?? row.token.slice(-8),
       deviceId: row.device_id,
       deviceName: row.device_name,
       publicKey,

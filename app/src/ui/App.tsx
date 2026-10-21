@@ -41,6 +41,7 @@ import {
 import {
   ShareHub,
   parseShareToken,
+  shareCode,
   type OutgoingShare,
   type VisitState,
 } from '../core/share';
@@ -1034,18 +1035,49 @@ export default function App() {
     [contacts, log, target],
   );
 
+  const sendTextBody = useCallback(
+    async (raw: string) => {
+      const manager = managerRef.current;
+      const body = raw.trim();
+      if (!manager || !target || !body) return false;
+      try {
+        const id = await manager.sendText(target, body);
+        void addTextEntry(id, 'out', body);
+        return true;
+      } catch (err) {
+        log(`⚠ 发送失败：${err instanceof Error ? err.message : String(err)}`);
+        return false;
+      }
+    },
+    [addTextEntry, log, target],
+  );
+
   const sendText = useCallback(async () => {
-    const manager = managerRef.current;
-    const body = text.trim();
-    if (!manager || !target || !body) return;
-    try {
-      const id = await manager.sendText(target, body);
-      void addTextEntry(id, 'out', body);
-      setText('');
-    } catch (err) {
-      log(`⚠ 发送失败：${err instanceof Error ? err.message : String(err)}`);
+    if (await sendTextBody(text)) setText('');
+  }, [sendTextBody, text]);
+
+  /** 输入框为空时，这个按钮直接把剪贴板文字发出去，省掉"点输入框再粘贴"。 */
+  const pasteTextAndSend = useCallback(async () => {
+    if (!target) return;
+    if (text.trim()) {
+      await sendText();
+      return;
     }
-  }, [addTextEntry, log, target, text]);
+    if (!navigator.clipboard?.readText) {
+      log('这个浏览器不支持按钮读取剪贴板，请在输入框里按 Ctrl / ⌘ + V。');
+      return;
+    }
+    try {
+      const clip = await navigator.clipboard.readText();
+      if (!clip.trim()) {
+        log('剪贴板里没有文字');
+        return;
+      }
+      if (await sendTextBody(clip)) setText('');
+    } catch {
+      log('读不到剪贴板：浏览器没给权限，可以点一下页面再按 Ctrl / ⌘ + V。');
+    }
+  }, [log, sendText, sendTextBody, target, text]);
 
   /* ---------------------------------------------------------- 公开链接 */
 
@@ -1080,6 +1112,18 @@ export default function App() {
         log('链接已复制');
       } catch {
         log('复制失败：浏览器没有给剪贴板权限，手动选上面的地址也一样');
+      }
+    },
+    [log],
+  );
+
+  const copyShareCode = useCallback(
+    async (token: string) => {
+      try {
+        await navigator.clipboard.writeText(shareCode(token));
+        log('分享编号已复制');
+      } catch {
+        log('复制失败：浏览器没有给剪贴板权限，手动选中编号也一样');
       }
     },
     [log],
@@ -1688,7 +1732,7 @@ export default function App() {
       <h2 className="pair-title">
         {manualOpen
           ? manualMode === 'show'
-            ? '让对方扫这个码'
+            ? '让对方连我'
             : '输入对方的码'
           : broadcasting
             ? '正在发出声波'
@@ -1748,7 +1792,7 @@ export default function App() {
                 onClick={() => setManualMode('join')}
                 disabled={!pairCode}
               >
-                改用对方的码
+                我来连对方
               </button>
             </>
           ) : null}
@@ -1847,7 +1891,7 @@ export default function App() {
                 data-testid="pair-show-mine"
                 onClick={() => setManualMode('show')}
               >
-                让对方扫我的码
+                让对方连我
               </button>
             </>
           ) : null}
@@ -2036,14 +2080,19 @@ export default function App() {
       ) : (
       <div className="text-compose" data-testid="text-compose">
         <textarea
-          placeholder="要发一段文字的话写在这里"
+          placeholder="点击右边的按钮直接粘贴给对方，或者在这里输入文字"
           value={text}
           onChange={(e) => setText(e.target.value)}
           rows={5}
         />
         <div className="row center">
-          <button className="primary" onClick={() => void sendText()} disabled={!text.trim() || !target}>
-            发送
+          <button
+            className="primary send-text-btn"
+            data-testid="send-text"
+            onClick={() => void pasteTextAndSend()}
+            disabled={!target}
+          >
+            {text.trim() ? '发送' : '粘贴'}
           </button>
         </div>
       </div>
@@ -2208,7 +2257,11 @@ export default function App() {
               <code className="invite" data-testid="share-link">
                 {s.link}
               </code>
+              <code className="invite" data-testid="share-code">
+                编号 {shareCode(s.token)}
+              </code>
               <button onClick={() => void copyShareLink(s.link)}>复制链接</button>
+              <button onClick={() => void copyShareCode(s.token)}>复制编号</button>
               <button onClick={() => void revokeShare(s.token)}>撤销</button>
               {s.visitors.length ? (
                 <span className="hint">

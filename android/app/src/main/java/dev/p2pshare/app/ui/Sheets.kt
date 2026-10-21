@@ -118,7 +118,15 @@ fun ReceiveSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val clipboard = LocalClipboardManager.current
     var copied by remember { mutableStateOf(false) }
-    val remaining = rememberRemaining(state.codeExpiresAt)
+    // 显示的是"还有多久换码"，不是"码还有多久失效"：用户看到刷新，直觉上
+    // 会把倒计时和刷新对上。码的 TTL 比轮换窗口长，两个时间不能混用。
+    val rotateAt =
+        if (state.codeExpiresAt > 0) {
+            state.codeExpiresAt - Pairing.CODE_TTL_MS + Pairing.CODE_ROTATE_MS
+        } else {
+            0L
+        }
+    val remaining = rememberRemaining(rotateAt)
     val online = state.signal is SignalLinkState.Open
 
     LaunchedEffect(copied) {
@@ -154,7 +162,7 @@ fun ReceiveSheet(
             }
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "让对方扫这个码",
+                text = "让对方连我",
                 style = MaterialTheme.typography.headlineMedium,
                 color = scheme.onBackground,
             )
@@ -223,11 +231,11 @@ fun ReceiveSheet(
                     else -> {
                         CountdownRing(
                             remainingMs = remaining,
-                            totalMs = Pairing.CODE_TTL_MS,
+                            totalMs = Pairing.CODE_ROTATE_MS,
                         )
                         Spacer(Modifier.width(9.dp))
                         Text(
-                            text = "还剩 ${((remaining + 999) / 1000)} 秒",
+                            text = "${((remaining + 999) / 1000)} 秒后换",
                             style = MaterialTheme.typography.labelMedium,
                             color = scheme.onSurfaceVariant,
                         )
@@ -276,7 +284,7 @@ fun ReceiveSheet(
                     .height(52.dp),
                 shape = RoundedCornerShape(16.dp),
             ) {
-                Text("改用对方的码", style = MaterialTheme.typography.labelLarge)
+                Text("我来连对方", style = MaterialTheme.typography.labelLarge)
             }
             Spacer(Modifier.height(28.dp))
         }
@@ -483,7 +491,7 @@ fun JoinSheet(
                 onClick = onShowMine,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("让对方扫我的码")
+                Text("让对方连我")
             }
             Spacer(Modifier.height(22.dp))
         }

@@ -65,8 +65,8 @@ export function shareLink(origin: string, token: string): string {
 /**
  * 从输入里取出分享 token。
  *
- * 收三种：整条链接、`#s=` 后面那一段、直接粘的 32 位十六进制。
- * 只认十六进制并且必须满 32 位，免得把配对码或者别的东西当成 token。
+ * 收四种：整条链接、`#s=` 后面那一段、32 位十六进制、8 位短编号。
+ * 短编号就是 token 末 8 位，方便只发一串数字/字母。
  */
 export function parseShareToken(text: string): string | null {
   const raw = (text ?? '').trim();
@@ -74,7 +74,13 @@ export function parseShareToken(text: string): string | null {
   const fromHash = /[#&?]s=([0-9a-f]{32})/i.exec(raw)?.[1];
   if (fromHash) return fromHash.toLowerCase();
   if (/^[0-9a-f]{32}$/i.test(raw)) return raw.toLowerCase();
+  if (/^[0-9a-f]{8}$/i.test(raw)) return raw.toLowerCase();
   return null;
+}
+
+/** 展示/复制用的短编号；和后端 code 的算法保持一致。 */
+export function shareCode(token: string): string {
+  return token.slice(-8);
 }
 
 /* ------------------------------------------------------------ 状态 */

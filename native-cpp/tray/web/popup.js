@@ -1150,17 +1150,34 @@
   /* ---------- 配对确认 ---------- */
 
   function showPairAsk(message) {
-    state.pairAsk = message;
+    const joiner = message.role === 'joiner';
+    state.pairAsk = { ...message, joiner };
     $('pairAskName').textContent = message.name || '未知设备';
+    $('pairAskKicker').textContent = joiner ? '正在配对' : '配对请求';
+    $('pairAskDesc').textContent = joiner
+      ? '等对方确认。如果两边数字不一致，点「取消配对」。'
+      : '两边屏幕上的核对数字要一致。不一致说明可能有人在中间换钥匙。';
+    $('pairAccept').hidden = joiner;
+    $('pairReject').textContent = joiner ? '取消配对' : '不一致';
     const sas = String(message.sas || '');
     $('pairAskSas').textContent = sas.length === 6 ? `${sas.slice(0, 3)} ${sas.slice(3)}` : sas;
     $('pairModal').hidden = false;
   }
 
-  function closePairAsk(accepted) {
-    if ($('pairModal').hidden) return;
+  function hidePairAsk() {
     $('pairModal').hidden = true;
     state.pairAsk = null;
+  }
+
+  function closePairAsk(accepted) {
+    if ($('pairModal').hidden) return;
+    const joiner = Boolean(state.pairAsk && state.pairAsk.joiner);
+    hidePairAsk();
+    if (joiner) {
+      post({ t: 'pair-cancel' });
+      toast('已取消配对');
+      return;
+    }
     post({ t: 'pair-reply', accepted: Boolean(accepted) });
     toast(accepted ? '已添加设备' : '已拒绝这次配对');
   }
@@ -1534,20 +1551,21 @@
         break;
       }
       case 'pair-ask': {
-        showPairAsk(message);
+        showPairAsk({ ...message, role: 'owner' });
         break;
       }
+      case 'pair-show': {
+        showPairAsk({ ...message, role: 'joiner' });
+        break;
+      }
+      case 'pair-hide':
       case 'pair-ask-cancel': {
-        if (state.pairAsk) {
-          $('pairModal').hidden = true;
-          state.pairAsk = null;
-        }
+        if (state.pairAsk) hidePairAsk();
         break;
       }
       case 'pair-ask-timeout': {
         if (state.pairAsk) {
-          $('pairModal').hidden = true;
-          state.pairAsk = null;
+          hidePairAsk();
           toast('配对请求超时了');
         }
         break;

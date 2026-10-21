@@ -176,8 +176,11 @@ describe('分享链接', () => {
     expect(parseShareToken(`  ${token.toUpperCase()}  `)).toBe(token);
   });
 
-  it('配对码和残缺的编号不会被当成 token', () => {
-    expect(parseShareToken('12345678')).toBeNull();
+  it('短编号可以取件，残缺或非十六进制的串不行', () => {
+    // 8 位十六进制是新的短编号，和配对码长得像但走的是取件入口
+    expect(parseShareToken('12345678')).toBe('12345678');
+    expect(parseShareToken('1234567')).toBeNull();
+    expect(parseShareToken('1234567g')).toBeNull();
     expect(parseShareToken('0123456789abcdef0123456789abcde')).toBeNull();
     expect(parseShareToken('https://share.test/#c=12345678')).toBeNull();
     expect(parseShareToken('')).toBeNull();

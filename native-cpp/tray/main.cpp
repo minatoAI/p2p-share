@@ -1319,6 +1319,10 @@ void on_page_message(const std::string& json) {
         g_pair_reply.cv.notify_all();
         return;
     }
+    if (type == "pair-cancel") {
+        if (g_session) g_session->cancel_pairing();
+        return;
+    }
     if (type == "remove-contact") {
         const std::string id = message.value("id", "");
         if (g_session && !id.empty()) g_session->remove_contact(id);

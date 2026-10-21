@@ -18,7 +18,12 @@ data class PairingUi(
 
 enum class SessionPhase { IDLE, SIGNALING, ICE, AUTH, READY, FAILED }
 
-data class PeerUi(val phase: SessionPhase, val message: String? = null)
+data class PeerUi(
+    val phase: SessionPhase,
+    val message: String? = null,
+    /** 失败后正在自动重连：按钮要变成「取消重连」 */
+    val autoRetrying: Boolean = false,
+)
 
 data class TransferItem(
     val id: String,

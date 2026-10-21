@@ -59,6 +59,8 @@ export type ShareState = 'available' | 'revoked';
 /** 一条分享的元信息。注意这里一个字节的用户数据都没有，见 docs/11 第 2 节。 */
 export interface ShareRecord {
   token: string;
+  /** 末 8 位短编号；公开取件时可以只发这一串 */
+  code?: string;
   /** 分享者的设备号。访客靠它去在线状态板上找分享者，所以不需要房间号 */
   deviceId: string;
   deviceName: string;
@@ -96,6 +98,7 @@ export interface ShareStatus {
 /** 我自己挂出去的那些分享，列表用。不含在线与否，那是 ShareStatus 的活。 */
 export interface ShareSummary {
   token: string;
+  code?: string;
   name: string;
   size: number;
   mime: string;

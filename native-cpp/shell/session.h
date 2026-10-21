@@ -101,6 +101,8 @@ public:
     void cancel_transfer(const std::string& id, bool incoming);
     /** 断开当前对端，回到"能再配一次"的状态 */
     void disconnect_peer();
+    /** 取消还没完成的配对（输码方看到核对码后决定不连了） */
+    void cancel_pairing();
     /**
      * 改接收文件的保存目录。接收线程每轮都读一次，改完下一轮就生效；
      * 目录不存在时接收侧会自己建。
@@ -117,6 +119,7 @@ private:
         SendFiles,
         SendText,
         Disconnect,
+        CancelPair,
         RemoveContact,
         RenameContact,
         SetDeviceName,

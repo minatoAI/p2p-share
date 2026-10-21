@@ -58,6 +58,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.p2pshare.app.core.parseShareToken
+import dev.p2pshare.app.core.shareCode
 import dev.p2pshare.app.session.AppState
 import dev.p2pshare.app.session.ShareUi
 import dev.p2pshare.app.session.ShareVisitorPhase
@@ -185,10 +186,15 @@ fun ShareSheet(
                         items(state.shares, key = { it.token }) { share ->
                             ShareCard(
                                 share = share,
-                                copied = copiedToken == share.token,
-                                onCopy = {
+                                copiedLink = copiedToken == "${share.token}|link",
+                                copiedCode = copiedToken == "${share.token}|code",
+                                onCopyLink = {
                                     clipboard.setText(AnnotatedString(share.link))
-                                    copiedToken = share.token
+                                    copiedToken = "${share.token}|link"
+                                },
+                                onCopyCode = {
+                                    clipboard.setText(AnnotatedString(shareCode(share.token)))
+                                    copiedToken = "${share.token}|code"
                                 },
                                 onSend = {
                                     val send = Intent(Intent.ACTION_SEND).apply {
@@ -208,7 +214,7 @@ fun ShareSheet(
                     value = linkInput,
                     onValueChange = { linkInput = it },
                     label = { Text("链接或分享编号") },
-                    placeholder = { Text("粘贴 https://…/#s=… 或 32 位编号") },
+                    placeholder = { Text("粘贴 https://…/#s=… 或 8 位编号") },
                     singleLine = true,
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier.fillMaxWidth(),
@@ -291,8 +297,10 @@ private fun ShareTab(text: String, active: Boolean, modifier: Modifier = Modifie
 @Composable
 private fun ShareCard(
     share: ShareUi,
-    copied: Boolean,
-    onCopy: () -> Unit,
+    copiedLink: Boolean,
+    copiedCode: Boolean,
+    onCopyLink: () -> Unit,
+    onCopyCode: () -> Unit,
     onSend: () -> Unit,
     onRevoke: () -> Unit,
 ) {
@@ -330,26 +338,42 @@ private fun ShareCard(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "编号 ${shareCode(share.token)}",
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoDigits),
+                color = scheme.onSurfaceVariant,
+            )
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onCopy, modifier = Modifier.height(38.dp)) {
+                OutlinedButton(onClick = onCopyLink, modifier = Modifier.height(38.dp)) {
                     Icon(
                         imageVector = Icons.Rounded.ContentCopy,
                         contentDescription = null,
                         modifier = Modifier.size(15.dp),
                     )
                     Spacer(Modifier.width(5.dp))
-                    Text(if (copied) "已复制" else "复制")
+                    Text(if (copiedLink) "链接已复制" else "复制链接")
                 }
-                OutlinedButton(onClick = onSend, modifier = Modifier.height(38.dp)) {
+                OutlinedButton(onClick = onCopyCode, modifier = Modifier.height(38.dp)) {
                     Icon(
-                        imageVector = Icons.Rounded.OpenInNew,
+                        imageVector = Icons.Rounded.ContentCopy,
                         contentDescription = null,
                         modifier = Modifier.size(15.dp),
                     )
                     Spacer(Modifier.width(5.dp))
-                    Text("发出去")
+                    Text(if (copiedCode) "编号已复制" else "复制编号")
                 }
+            }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = onSend, modifier = Modifier.height(38.dp)) {
+                Icon(
+                    imageVector = Icons.Rounded.OpenInNew,
+                    contentDescription = null,
+                    modifier = Modifier.size(15.dp),
+                )
+                Spacer(Modifier.width(5.dp))
+                Text("发出去")
             }
             if (share.visitors.isNotEmpty()) {
                 Spacer(Modifier.height(8.dp))

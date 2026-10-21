@@ -22,10 +22,13 @@
 #include <propvarutil.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#include <shobjidl.h>
+#include <tlhelp32.h>
 #include <wrl.h>
 
 #include <cstdio>
 #include <cstdint>
+#include <cwchar>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -55,6 +58,7 @@ constexpr int kIdCancel = 1002;
 constexpr int kIdDesktop = 1010;
 constexpr int kIdAutostart = 1011;
 constexpr int kIdSendTo = 1012;
+constexpr int kIdBrowse = 1013;
 constexpr int kIdOpen = 1020;
 constexpr int kIdFinish = 1021;
 constexpr int kIdRetry = 1022;
@@ -81,6 +85,7 @@ HWND g_sendto_check = nullptr;
 HWND g_progress = nullptr;
 HWND g_button_primary = nullptr;
 HWND g_button_secondary = nullptr;
+HWND g_button_browse = nullptr;
 HFONT g_font = nullptr;
 HFONT g_title_font = nullptr;
 HFONT g_section_font = nullptr;
@@ -101,6 +106,8 @@ bool g_desktop = true;
 bool g_autostart = false;
 bool g_sendto = true;
 fs::path g_dir_override;
+/** 用户选的父目录；实际安装目录是它下面的 p2p-share。 */
+fs::path g_install_base;
 fs::path g_log_path;
 
 std::wstring utf8_to_utf16(const std::string& text) {
@@ -150,9 +157,11 @@ fs::path exe_path() {
     return len == 0 ? fs::path() : fs::path(std::wstring(buffer, len));
 }
 
-fs::path default_install_dir() {
-    return known_folder(FOLDERID_LocalAppData) / L"p2p-share";
+fs::path install_base() {
+    return g_install_base.empty() ? known_folder(FOLDERID_LocalAppData) : g_install_base;
 }
+
+fs::path default_install_dir() { return install_base() / L"p2p-share"; }
 
 fs::path install_dir() { return g_dir_override.empty() ? default_install_dir() : g_dir_override; }
 
@@ -187,14 +196,83 @@ bool set_autostart(bool enabled, const fs::path& tray) {
     return status == ERROR_SUCCESS;
 }
 
-void stop_running_tray() {
-    HWND target = FindWindowW(L"P2PTrayProto.Popup", nullptr);
-    if (!target) return;
-    log_line(L"关闭正在运行的托盘程序");
-    PostMessageW(target, WM_CLOSE, 0, 0);
-    for (int i = 0; i < 30; ++i) {
-        if (!IsWindow(target)) return;
-        Sleep(100);
+std::wstring human_size(std::uintmax_t bytes) {
+    wchar_t buffer[64] = {};
+    if (bytes >= 1024ull * 1024ull * 1024ull) {
+        std::swprintf(buffer, std::size(buffer), L"%.1f GB",
+                      static_cast<double>(bytes) / (1024.0 * 1024.0 * 1024.0));
+    } else if (bytes >= 1024ull * 1024ull) {
+        std::swprintf(buffer, std::size(buffer), L"%.1f MB",
+                      static_cast<double>(bytes) / (1024.0 * 1024.0));
+    } else {
+        std::swprintf(buffer, std::size(buffer), L"%.0f KB",
+                      static_cast<double>(bytes) / 1024.0);
+    }
+    return buffer;
+}
+
+/** 安装后大致占多少：内嵌托盘 + 安装器自身 + 快捷方式/注册表的零头。 */
+std::uintmax_t install_size_bytes() {
+    std::uintmax_t total = 64 * 1024;
+    if (HRSRC resource = FindResourceW(nullptr, MAKEINTRESOURCEW(IDR_TRAY_EXE), RT_RCDATA)) {
+        total += SizeofResource(nullptr, resource);
+    }
+    std::error_code ec;
+    const auto self = fs::file_size(exe_path(), ec);
+    if (!ec) total += self;
+    return total;
+}
+
+void close_window_class(const wchar_t* cls) {
+    if (HWND window = FindWindowW(cls, nullptr)) {
+        PostMessageW(window, WM_CLOSE, 0, 0);
+        for (int i = 0; i < 20 && IsWindow(window); ++i) Sleep(100);
+    }
+}
+
+/** 按可执行文件完整路径结束托盘；比按窗口类找更可靠，托盘隐藏时也能退。 */
+void terminate_tray_at(const fs::path& tray) {
+    if (tray.empty()) return;
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) return;
+    PROCESSENTRY32W entry = {};
+    entry.dwSize = sizeof(entry);
+    if (Process32FirstW(snapshot, &entry)) {
+        do {
+            if (_wcsicmp(entry.szExeFile, L"p2p-tray.exe") != 0) continue;
+            HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
+                                         FALSE, entry.th32ProcessID);
+            if (!process) continue;
+            wchar_t path[2048] = {};
+            DWORD size = static_cast<DWORD>(std::size(path));
+            if (QueryFullProcessImageNameW(process, 0, path, &size) &&
+                _wcsicmp(path, tray.c_str()) == 0) {
+                log_line(L"结束正在运行的托盘：" + std::wstring(path));
+                TerminateProcess(process, 0);
+                WaitForSingleObject(process, 3000);
+            }
+            CloseHandle(process);
+        } while (Process32NextW(snapshot, &entry));
+    }
+    CloseHandle(snapshot);
+}
+
+void stop_running_tray(const fs::path& tray) {
+    close_window_class(L"P2PTrayProto.Msg");
+    close_window_class(L"P2PTrayProto.Popup");
+    terminate_tray_at(tray);
+    // 给文件锁和 WebView2 子进程一点退出时间；卸载紧接着要删目录。
+    for (int i = 0; i < 20; ++i) {
+        if (!fs::exists(tray)) break;
+        std::error_code ec;
+        const auto handle = CreateFileW(tray.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (handle == INVALID_HANDLE_VALUE) {
+            Sleep(100);
+            continue;
+        }
+        CloseHandle(handle);
+        break;
     }
 }
 
@@ -292,9 +370,8 @@ bool install(std::wstring* error) {
         *error = L"建不了安装目录：" + dir.wstring();
         return false;
     }
-    stop_running_tray();
-
     const fs::path tray = dir / L"p2p-tray.exe";
+    stop_running_tray(tray);
     if (!extract_tray(tray, error)) return false;
     log_line(L"释放托盘程序 → " + tray.wstring());
 
@@ -385,7 +462,7 @@ void remove_user_data() {
 
 bool uninstall(std::wstring* error) {
     const fs::path dir = registered_install_dir();
-    stop_running_tray();
+    stop_running_tray(dir / L"p2p-tray.exe");
 
     remove_file(known_folder(FOLDERID_Programs) / kShortcutName);
     remove_file(known_folder(FOLDERID_Desktop) / kShortcutName);
@@ -601,12 +678,34 @@ LRESULT CALLBACK button_subclass(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
     return DefSubclassProc(hwnd, message, wparam, lparam);
 }
 
+bool choose_install_base(HWND owner) {
+    ComPtr<IFileOpenDialog> dialog;
+    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&dialog)))) {
+        return false;
+    }
+    FILEOPENDIALOGOPTIONS options = 0;
+    dialog->GetOptions(&options);
+    dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+    dialog->SetTitle(L"选择安装到哪个文件夹（会在里面创建 p2p-share）");
+    if (dialog->Show(owner) != S_OK) return false;
+    ComPtr<IShellItem> item;
+    if (FAILED(dialog->GetResult(&item))) return false;
+    PWSTR path = nullptr;
+    if (FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)) || !path) return false;
+    g_install_base = fs::path(path);
+    g_dir_override.clear();
+    CoTaskMemFree(path);
+    return true;
+}
+
 void layout_controls() {
     const bool options = g_screen == Screen::options;
     const bool working = g_screen == Screen::working;
     for (HWND check : {g_desktop_check, g_autostart_check, g_sendto_check}) {
         ShowWindow(check, options ? SW_SHOW : SW_HIDE);
     }
+    ShowWindow(g_button_browse, options ? SW_SHOW : SW_HIDE);
     ShowWindow(g_progress, working ? SW_SHOW : SW_HIDE);
     if (working) {
         ShowWindow(g_button_primary, SW_HIDE);
@@ -667,16 +766,20 @@ void paint_window(HWND window) {
 
         RECT box{px(40), px(282), px(520), px(330)};
         fill_round(dc, box, px(10), RGB(247, 250, 248), RGB(232, 238, 234));
-        RECT label{px(54), px(288), px(506), px(306)};
+        RECT label{px(54), px(288), px(420), px(306)};
         draw_text(dc, L"安装位置", label, g_small_font, kMuted,
                   DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-        RECT path{px(54), px(306), px(506), px(326)};
+        RECT size{px(214), px(288), px(420), px(306)};
+        const std::wstring size_text = L"占用约 " + human_size(install_size_bytes());
+        draw_text(dc, size_text.c_str(), size, g_small_font, kMuted,
+                  DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
+        RECT path{px(54), px(306), px(420), px(326)};
         const std::wstring target = install_dir().wstring();
         draw_text(dc, target.c_str(), path, g_font, kInk,
                   DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
 
         RECT status{px(24), px(350), px(536), px(370)};
-        draw_text(dc, L"点「安装」开始。安装到当前用户目录，不需要管理员权限。", status,
+        draw_text(dc, L"点「安装」开始。会在所选文件夹下创建 p2p-share 子目录。", status,
                   g_small_font, kMuted, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     } else if (g_screen == Screen::working) {
         RECT title{px(24), px(196), px(536), px(230)};
@@ -770,6 +873,12 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                     return 0;
                 case kIdSendTo:
                     toggle_check(kIdSendTo);
+                    return 0;
+                case kIdBrowse:
+                    if (choose_install_base(window)) {
+                        InvalidateRect(window, nullptr, TRUE);
+                        UpdateWindow(window);
+                    }
                     return 0;
                 case kIdInstall:
                     start_install(window);
@@ -881,10 +990,16 @@ bool show_installer() {
     g_button_secondary = CreateWindowExW(
         0, L"BUTTON", L"取消", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0, 0, 0, g_window,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdCancel)), g_instance, nullptr);
+    g_button_browse = CreateWindowExW(
+        0, L"BUTTON", L"更改", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, px(428), px(288), px(78),
+        px(28), g_window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdBrowse)), g_instance,
+        nullptr);
     SendMessageW(g_button_primary, WM_SETFONT, reinterpret_cast<WPARAM>(g_button_font), TRUE);
     SendMessageW(g_button_secondary, WM_SETFONT, reinterpret_cast<WPARAM>(g_button_font), TRUE);
+    SendMessageW(g_button_browse, WM_SETFONT, reinterpret_cast<WPARAM>(g_small_font), TRUE);
     SetWindowSubclass(g_button_primary, button_subclass, 1, 0);
     SetWindowSubclass(g_button_secondary, button_subclass, 2, 0);
+    SetWindowSubclass(g_button_browse, button_subclass, 3, 0);
 
     layout_controls();
     ShowWindow(g_window, SW_SHOW);
