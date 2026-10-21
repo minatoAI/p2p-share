@@ -10,6 +10,9 @@ WebRTC DataChannel。
 
 - 网页 ↔ 安卓、网页 ↔ Windows、安卓 ↔ Windows 双向配对
 - 文件、文字、公开链接取件；断线重连、离线等待、传输中取消
+- 文字送达确认：对方收到后回执，未确认可以一键重发
+- 一键粘贴发送（网页 / Windows）；Windows 收到文件后可 Ctrl+V 直接粘贴
+- 公开链接支持整条链接或 8 位短编号取件，复制时链接/编号二选一
 - 六位配对码 + 六位短认证串核对；配对码 20 秒轮换、30 秒有效
 - 网页端刷新即换身份；Windows/安卓持久化身份和联系人
 - 服务端不转发文件字节，只保存配对码和公开分享的元数据
@@ -28,10 +31,10 @@ WebRTC DataChannel。
 
 GitHub Releases 提供两个安装包：
 
-- `p2p-share-android-0.4.4.apk`：Android 8.0+（minSdk 26），arm64-v8a。
+- `p2p-share-android-0.4.5.apk`：Android 8.0+（minSdk 26），arm64-v8a。
   这是用 Android debug key 签名的可直接安装包，不是应用商店版本。
 - `p2p-share-windows-x64-setup.exe`：Windows 10/11 x64，按用户安装到
-  `%LOCALAPPDATA%\p2p-share`，不需要管理员权限。安装包未做代码签名，
+  所选目录下的 `p2p-share`，不需要管理员权限。安装包未做代码签名，
   SmartScreen 可能提示“未知发布者”。
 
 ## 快速开始
