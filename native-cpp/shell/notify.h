@@ -81,9 +81,18 @@ public:
     bool installed() const { return installed_; }
 
 private:
+    /** 真去发一次 NIF_INFO。boot 的是 balloon() 的重试逻辑，不是它的调用方。 */
+    bool send_balloon(const std::wstring& title, const std::wstring& text,
+                      bool play_system_sound);
+    /** 图标丢了就按记下来的参数重装一次。资源管理器重启之后要靠它。 */
+    bool reinstall();
+
     HWND owner_ = nullptr;
     HICON icon_ = nullptr;
     UINT id_ = 1;
+    /** 装图标时用的回调消息和提示文字，重装时要原样再传一遍 */
+    UINT callback_ = 0;
+    std::wstring tip_;
     bool installed_ = false;
 };
 

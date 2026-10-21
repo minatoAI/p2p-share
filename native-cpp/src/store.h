@@ -37,6 +37,14 @@ struct Settings {
      * 关着的时候，对方发来的文字也不会自动写进剪贴板。
      */
     bool auto_sync_clipboard = false;
+    /**
+     * 收到文件后把文件放进 Windows 剪贴板（CF_HDROP + 图片格式），默认开。
+     *
+     * 手机上发完一张图，人在电脑上按一次 Ctrl+V 就能贴进聊天框或文档——
+     * 这是"互传"最顺的一步，所以默认开着；写剪贴板失败只记日志，
+     * 文件本身早就落盘了，不受影响。
+     */
+    bool copy_received_files = true;
 };
 
 Settings load_settings(const std::filesystem::path& dir);

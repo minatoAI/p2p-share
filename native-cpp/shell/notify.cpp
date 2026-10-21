@@ -167,6 +167,8 @@ void play(NotifySound sound) {
 
 bool Tray::install(HWND owner, UINT callback_message, const std::wstring& tip, HICON icon) {
     owner_ = owner;
+    callback_ = callback_message;
+    tip_ = tip;
     icon_ = icon ? icon : LoadIconW(nullptr, IDI_APPLICATION);
     NOTIFYICONDATAW data = {};
     data.cbSize = sizeof(data);
@@ -189,6 +191,25 @@ bool Tray::install(HWND owner, UINT callback_message, const std::wstring& tip, H
     return installed_;
 }
 
+bool Tray::reinstall() {
+    if (!owner_) return false;
+    NOTIFYICONDATAW data = {};
+    data.cbSize = sizeof(data);
+    data.hWnd = owner_;
+    data.uID = id_;
+    data.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    data.uCallbackMessage = callback_;
+    data.hIcon = icon_ ? icon_ : LoadIconW(nullptr, IDI_APPLICATION);
+    const std::wstring trimmed = tip_.size() > 120 ? tip_.substr(0, 120) : tip_;
+    lstrcpynW(data.szTip, trimmed.c_str(), ARRAYSIZE(data.szTip));
+    installed_ = Shell_NotifyIconW(NIM_ADD, &data) != FALSE;
+    if (installed_) {
+        data.uVersion = NOTIFYICON_VERSION_4;
+        Shell_NotifyIconW(NIM_SETVERSION, &data);
+    }
+    return installed_;
+}
+
 void Tray::remove() {
     if (!installed_) return;
     NOTIFYICONDATAW data = {};
@@ -200,6 +221,7 @@ void Tray::remove() {
 }
 
 void Tray::set_tip(const std::wstring& tip) {
+    tip_ = tip;
     if (!installed_) return;
     NOTIFYICONDATAW data = {};
     data.cbSize = sizeof(data);
@@ -223,9 +245,8 @@ void Tray::set_icon(HICON icon) {
     Shell_NotifyIconW(NIM_MODIFY, &data);
 }
 
-bool Tray::balloon(const std::wstring& title, const std::wstring& text,
-                   bool play_system_sound) {
-    if (!installed_) return false;
+bool Tray::send_balloon(const std::wstring& title, const std::wstring& text,
+                        bool play_system_sound) {
     NOTIFYICONDATAW data = {};
     data.cbSize = sizeof(data);
     data.hWnd = owner_;
@@ -236,11 +257,35 @@ bool Tray::balloon(const std::wstring& title, const std::wstring& text,
               ARRAYSIZE(data.szInfo));
     lstrcpynW(data.szInfoTitle, (title.size() > 56 ? title.substr(0, 56) : title).c_str(),
               ARRAYSIZE(data.szInfoTitle));
-    data.dwInfoFlags = NIIF_RESPECT_QUIET_TIME;
-    if (icon_) data.dwInfoFlags |= NIIF_USER | NIIF_LARGE_ICON;
+    // uTimeout 和 uVersion 是同一个 union！装图标时写的是 uVersion，这里必须
+    // 重新写 uTimeout。留着 0 全靠系统"当默认 10 秒处理"，有些环境下 0 会被
+    // 当成无效值，气泡直接不显示——这就是"只听到声音、看不到通知"的常见原因。
+    data.uTimeout = 10000;
+    // 刻意不加 NIIF_RESPECT_QUIET_TIME：那一档会在免打扰时段（Windows 默认
+    // 22:00-07:00 就属于免打扰）把气泡整条压掉，而我们的提示音是绕过通知平台
+    // 自己 PlaySound 放的。结果就是"半夜收到文件只有一声响、什么都没有"——
+    // 这正是用户报的那个问题。宁可在免打扰时段也弹出来，也不要让它悄悄消失：
+    // 声音那侧已经由 noise_is_welcome() 把关了。
+    data.dwInfoFlags = 0;
+    // NIIF_USER 表示用 hBalloonIcon。不带 NIIF_LARGE_ICON：那一位要求图标是
+    // SM_CXICON 的大图标，而我们手上只有 SM_CXSMICON 的，尺寸对不上时
+    // Win10/11 会干脆不弹这个气泡。
+    if (icon_) {
+        data.dwInfoFlags |= NIIF_USER;
+        data.hBalloonIcon = icon_;
+    }
     if (!play_system_sound) data.dwInfoFlags |= NIIF_NOSOUND;
-    data.hBalloonIcon = icon_;
     return Shell_NotifyIconW(NIM_MODIFY, &data) != FALSE;
+}
+
+bool Tray::balloon(const std::wstring& title, const std::wstring& text,
+                   bool play_system_sound) {
+    if (!installed_) return false;
+    if (send_balloon(title, text, play_system_sound)) return true;
+    // 走到这里说明图标不在托盘里了：最常见的是资源管理器重启过（图标全没了，
+    // 但 installed_ 还是 true）。重装一次再发，还失败就承认失败，让调用方去记日志。
+    if (!reinstall()) return false;
+    return send_balloon(title, text, play_system_sound);
 }
 
 bool Tray::notify(const std::wstring& title, const std::wstring& text, NotifySound sound) {

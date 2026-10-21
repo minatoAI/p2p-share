@@ -20,6 +20,24 @@ struct Challenge {
 /** 挑战的有效窗口 */
 inline constexpr long long kChallengeTtlMs = 2 * 60 * 1000;
 
+/**
+ * 配对帧里自报的平台名。
+ *
+ * 以前 Windows 和安卓都报 "native"，两边都一样，界面上说不清对面是台手机还是
+ * 电脑，日志里也分不开。现在各报各的：Windows 报 "windows"，安卓报 "android"。
+ * 读的一侧不能只看新值——升级一半的时候对面还是 "native"，所以统一过一遍
+ * normalize_platform，别让旧设备变成"平台未知"。
+ */
+inline constexpr const char* kPlatformWindows = "windows";
+
+/**
+ * 把对端自报的平台名归一成小写、去空白。
+ *
+ * "native" 原样保留：它是旧版本的叫法，两台旧设备互相看不出来谁是谁。
+ * 这里不把它猜成 "windows"——旧版安卓也报这个名字，猜错比不猜更糟。
+ */
+std::string normalize_platform(const std::string& raw);
+
 long long now_ms();
 
 /** 待签名的规范化字节。换行分隔，结尾不带换行，字段名和顺序都不能动。 */

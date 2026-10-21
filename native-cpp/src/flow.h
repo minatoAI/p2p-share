@@ -87,9 +87,15 @@ bool authenticate(const std::shared_ptr<rtc::DataChannel>& dc,
                   const Identity& identity, const std::string& peer_id,
                   const PublicKeyJwk& peer_key, MessageQueue* inbox, int timeout_ms);
 
-/** 发一段文字 */
+/**
+ * 发一段文字。
+ *
+ * 文字是一帧控制 JSON（t=text），不带文件 meta，对端不会因为它去开文件。
+ * out_id 非空时把这一帧的 id 带出去：发送侧要靠它等对端的 text-ack，
+ * 等到才算"送达"，等不到就是"没确认"。
+ */
 bool send_text(const std::shared_ptr<rtc::DataChannel>& dc, const Identity& identity,
-               const std::string& text);
+               const std::string& text, std::string* out_id = nullptr);
 
 /**
  * 发一个文件。分片头是两个小端 uint32：序号、总数。
