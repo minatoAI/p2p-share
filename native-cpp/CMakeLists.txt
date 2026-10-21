@@ -69,7 +69,7 @@ if(WIN32)
   # 资源编号只在这一个地方定义，同时喂给 .rc 和 C++ 两侧，不会对不上
   set(SHELL_RESOURCE_ID 101)
   configure_file(shell/shell.rc.in ${CMAKE_CURRENT_BINARY_DIR}/shell.rc @ONLY)
-  add_executable(p2p-shell WIN32 shell/main.cpp shell/sendto.cpp shell/notify.cpp shell/session.cpp shell/picker.cpp shell/overlay.cpp ${CMAKE_CURRENT_BINARY_DIR}/shell.rc)
+  add_executable(p2p-shell WIN32 shell/main.cpp shell/sendto.cpp shell/notify.cpp shell/session.cpp shell/share_link.cpp shell/picker.cpp shell/overlay.cpp ${CMAKE_CURRENT_BINARY_DIR}/shell.rc)
   # NOMINMAX：windows.h 会把 min 和 max 定义成宏，之后 std::min、std::max、
   # time_point::max() 全被这两个宏吃掉，报的错还很难看懂（"::"右边的非法标记）。
   # 整个目标一起定义，省得每个文件各踩一次。
@@ -77,7 +77,7 @@ if(WIN32)
     IDR_INDEX_HTML=${SHELL_RESOURCE_ID})
   target_include_directories(p2p-shell PRIVATE ${WEBVIEW2_INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
   # winmm 是 PlaySound
-  target_link_libraries(p2p-shell PRIVATE p2pcore ${WEBVIEW2_LOADER} shlwapi.lib winmm.lib)
+  target_link_libraries(p2p-shell PRIVATE p2pcore ${WEBVIEW2_LOADER} shlwapi.lib winmm.lib winhttp.lib)
   # 界面文件放到 exe 旁边，外壳按相对路径加载
   add_custom_command(TARGET p2p-shell POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
