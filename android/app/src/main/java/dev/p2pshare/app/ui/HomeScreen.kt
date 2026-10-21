@@ -349,13 +349,13 @@ private fun ActionCard(
 
 /** 首页联系人分四组，顺序就是 enum 的声明顺序 */
 private enum class ContactGroup(val label: String) {
-    ONLINE_NATIVE("在线 · 原生端"),
+    ONLINE_NATIVE("在线 · 电脑/安卓"),
     ONLINE_WEB("在线 · 网页端"),
-    OFFLINE_NATIVE("离线 · 原生端"),
+    OFFLINE_NATIVE("离线 · 电脑/安卓"),
     OFFLINE_WEB("离线 · 网页端"),
 }
 
-/** 没有平台标记的旧记录按原生端处理，不参与网页端的过期清理 */
+/** 没有平台标记的旧记录按电脑端处理，不参与网页端的过期清理 */
 private fun ContactRecord.group(presence: Map<String, Boolean>): ContactGroup {
     val online = presence[peerId] == true
     return when {

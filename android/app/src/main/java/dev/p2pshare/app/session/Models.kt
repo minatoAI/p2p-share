@@ -23,6 +23,13 @@ data class PeerUi(
     val message: String? = null,
     /** 失败后正在自动重连：按钮要变成「取消重连」 */
     val autoRetrying: Boolean = false,
+    /**
+     * 静默恢复中：息屏、无网、应用不在前台，或者自动重连还没到该露脸的次数。
+     * 这期间不显示失败横幅，只在头栏留一个不打扰人的状态。
+     */
+    val quiet: Boolean = false,
+    /** 已经自动重连到第几次，横幅上显示进度用 */
+    val retryAttempt: Int = 0,
 )
 
 data class TransferItem(
@@ -42,12 +49,26 @@ data class TransferItem(
     val speed: Long = 0,
 )
 
+/** 自己发出的文字走到哪一步了。收到的文字不看这个字段。 */
+enum class TextDelivery {
+    /** 连接没就绪，排在待发队列里 */
+    QUEUED,
+    /** 已经写进数据通道，等对方的 text-ack */
+    SENDING,
+    /** 对方回了 text-ack */
+    DELIVERED,
+    /** 8 秒没等到确认；老版本对端不会回 ack，也走这里 */
+    UNCONFIRMED,
+}
+
 data class TextItem(
     val id: String,
     val peerId: String,
     val direction: Direction,
     val text: String,
     val at: Long = System.currentTimeMillis(),
+    /** 发送状态：排队/等确认/已送达/未确认。收到的文字这个值没有意义 */
+    val delivery: TextDelivery = TextDelivery.SENDING,
 )
 
 data class UiError(val id: Long, val message: String)
@@ -73,6 +94,11 @@ data class AppState(
     /** 整体传输记录，落盘，侧边菜单用它 */
     val history: List<HistoryEntry> = emptyList(),
     val texts: List<TextItem> = emptyList(),
+    /**
+     * 最近一条收到的文字。界面拿它判断要不要自动跳到对应会话页；
+     * 用消息 id 做 key，同一条消息不会触发第二次跳转。
+     */
+    val incomingText: TextItem? = null,
     val shares: List<ShareUi> = emptyList(),
     val visit: VisitUi? = null,
     val shareBusy: Boolean = false,

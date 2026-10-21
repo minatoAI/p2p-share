@@ -40,6 +40,7 @@ import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.LinkOff
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -68,7 +69,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -79,8 +82,10 @@ import dev.p2pshare.app.core.Direction
 import dev.p2pshare.app.core.TransferStatus
 import dev.p2pshare.app.session.AppState
 import dev.p2pshare.app.session.SessionPhase
+import dev.p2pshare.app.session.TextDelivery
 import dev.p2pshare.app.session.TextItem
 import dev.p2pshare.app.session.TransferItem
+import kotlinx.coroutines.delay
 
 private sealed interface Entry {
     val at: Long
@@ -103,19 +108,28 @@ fun SessionScreen(
     peerId: String,
     onBack: () -> Unit,
     onRetry: () -> Unit,
+    onCancelReconnect: () -> Unit,
     onCancel: () -> Unit,
     onForget: () -> Unit,
     onSendFiles: (List<Uri>) -> Unit,
     onSendText: (String) -> Unit,
+    onRetryText: (String) -> Unit,
     onOpenFile: (String, String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val scheme = MaterialTheme.colorScheme
     val name = state.displayName(peerId)
-    val phase = state.peers[peerId]?.phase ?: SessionPhase.IDLE
+    val peerUi = state.peers[peerId]
+    val phase = peerUi?.phase ?: SessionPhase.IDLE
     val ready = phase == SessionPhase.READY
+    // 息屏/无网/后台或静默重连期间：失败和重连横幅先不露
+    val quiet = peerUi?.quiet == true && !ready
+    val autoRetrying = peerUi?.autoRetrying == true
+    val retryAttempt = peerUi?.retryAttempt ?: 0
     val peerOnline = state.presence[peerId] == true
     val contact = state.contacts.firstOrNull { it.peerId == peerId }
+    // 有配对记录就可以先写/先选文件，连接没就绪时由会话层排住
+    val canCompose = contact != null
 
     val entries = remember(state.transfers, state.texts, peerId) {
         buildList {
@@ -143,7 +157,8 @@ fun SessionScreen(
 
     val submit = {
         val text = draft.trim()
-        if (text.isNotEmpty() && ready) {
+        // 连接没就绪也允许发：会话层会先排住，连上后自动补发
+        if (text.isNotEmpty() && canCompose) {
             draft = ""
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
             onSendText(text)
@@ -180,16 +195,18 @@ fun SessionScreen(
                     PlatformBadge(contact?.peerPlatform, compact = true)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // 静默恢复期间用「连接中」的中性色，不摆红点吓人
+                    val shownPhase = if (quiet) SessionPhase.SIGNALING else phase
                     PulseDot(
-                        color = phaseColor(phase, scheme.primary, scheme.secondary, scheme.error),
-                        pulsing = !ready && phase != SessionPhase.FAILED && phase != SessionPhase.IDLE,
+                        color = phaseColor(shownPhase, scheme.primary, scheme.secondary, scheme.error),
+                        pulsing = !ready && !quiet && phase != SessionPhase.FAILED && phase != SessionPhase.IDLE,
                         size = 6.dp,
                     )
                     Spacer(Modifier.size(5.dp))
                     Text(
-                        text = primaryStatus(phase, peerOnline),
+                        text = primaryStatus(phase, peerOnline, quiet),
                         style = MaterialTheme.typography.labelMedium,
-                        color = phaseColor(phase, scheme.primary, scheme.secondary, scheme.error),
+                        color = phaseColor(shownPhase, scheme.primary, scheme.secondary, scheme.error),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -234,10 +251,14 @@ fun SessionScreen(
             if (entries.isEmpty()) {
                 EmptyConversation(
                     phase = phase,
-                    reason = state.peers[peerId]?.message,
+                    reason = peerUi?.message,
                     peerOnline = peerOnline,
                     fingerprint = contact?.fingerprint,
+                    quiet = quiet,
+                    autoRetrying = autoRetrying,
+                    retryAttempt = retryAttempt,
                     onRetry = onRetry,
+                    onCancelReconnect = onCancelReconnect,
                 )
             } else {
                 LazyColumn(
@@ -267,7 +288,10 @@ fun SessionScreen(
                                 )
                             }
                             when (entry) {
-                                is Entry.TextLine -> TextBubble(entry.item)
+                                is Entry.TextLine -> TextBubble(
+                                    item = entry.item,
+                                    onRetry = { onRetryText(entry.item.id) },
+                                )
                                 is Entry.FileLine -> FileCard(
                                     item = entry.item,
                                     onOpen = {
@@ -281,13 +305,17 @@ fun SessionScreen(
             }
         }
 
-        // 失败时中间区域已经写了原因和「重试」，底部横幅只在有聊天记录时补位
-        if (!ready && !(phase == SessionPhase.FAILED && entries.isEmpty())) {
+        // 失败时中间区域已经写了原因和「重试」，底部横幅只在有聊天记录时补位。
+        // 静默恢复期间（息屏/无网/后台/前几次重试）整个横幅先不显示。
+        if (!ready && !quiet && !(phase == SessionPhase.FAILED && entries.isEmpty())) {
             ConnectionBanner(
                 phase = phase,
-                detail = state.peers[peerId]?.message,
+                detail = peerUi?.message,
                 peerOnline = peerOnline,
+                autoRetrying = autoRetrying,
+                retryAttempt = retryAttempt,
                 onRetry = onRetry,
+                onCancelReconnect = onCancelReconnect,
                 onCancel = onCancel,
             )
         }
@@ -300,7 +328,7 @@ fun SessionScreen(
         ) {
             FilledTonalIconButton(
                 onClick = { picker.launch(arrayOf("*/*")) },
-                enabled = ready,
+                enabled = canCompose,
                 modifier = Modifier.size(46.dp),
             ) {
                 Icon(
@@ -315,14 +343,14 @@ fun SessionScreen(
                     .weight(1f)
                     .heightIn(min = 46.dp),
                 shape = RoundedCornerShape(23.dp),
-                color = scheme.surfaceVariant.copy(alpha = if (ready) 0.85f else 0.45f),
+                color = scheme.surfaceVariant.copy(alpha = if (canCompose) 0.85f else 0.45f),
             ) {
                 BasicTextField(
                     value = draft,
                     onValueChange = { draft = it },
-                    enabled = ready,
+                    enabled = canCompose,
                     textStyle = MaterialTheme.typography.bodyLarge.copy(
-                        color = if (ready) scheme.onSurface else scheme.onSurfaceVariant.copy(alpha = 0.5f),
+                        color = if (canCompose) scheme.onSurface else scheme.onSurfaceVariant.copy(alpha = 0.5f),
                     ),
                     cursorBrush = SolidColor(scheme.primary),
                     maxLines = 4,
@@ -338,7 +366,10 @@ fun SessionScreen(
                         ) {
                             if (draft.isEmpty()) {
                                 Text(
-                                    text = if (ready) "说句话…" else "连接后才能发送",
+                                    // 连接没就绪也能先写，发出去后会排队等连接
+                                    text = if (!canCompose) "配对后才能发送"
+                                    else if (ready) "说句话…"
+                                    else "先写下来，连上自动发送",
                                     style = MaterialTheme.typography.bodyLarge,
                                     color = scheme.onSurfaceVariant.copy(alpha = 0.6f),
                                 )
@@ -351,7 +382,7 @@ fun SessionScreen(
             Spacer(Modifier.size(8.dp))
             FilledIconButton(
                 onClick = submit,
-                enabled = ready && draft.isNotBlank(),
+                enabled = canCompose && draft.isNotBlank(),
                 modifier = Modifier.size(46.dp),
                 shape = CircleShape,
             ) {
@@ -403,36 +434,98 @@ private fun phaseColor(
     else -> pending
 }
 
-private fun primaryStatus(phase: SessionPhase, peerOnline: Boolean): String = when (phase) {
+private fun primaryStatus(phase: SessionPhase, peerOnline: Boolean, quiet: Boolean): String = when (phase) {
     SessionPhase.READY -> "已连接"
     // 失败页中间已经有一个「连接失败」和重试按钮，头栏不再重复同一个词，
     // 只留状态点。AND-1 的“头栏不重复”靠这一行兑现。
-    SessionPhase.FAILED -> ""
-    SessionPhase.IDLE -> if (peerOnline) "在线" else "对方离线"
+    SessionPhase.FAILED -> if (quiet) "正在恢复连接" else ""
+    SessionPhase.IDLE -> when {
+        quiet -> "正在恢复连接"
+        peerOnline -> "在线"
+        else -> "对方离线"
+    }
     // 正在找对方、打洞、核验身份都只是过程，主状态仍然是「在线」。
-    else -> "在线"
+    else -> if (quiet) "正在连接" else "在线"
 }
 
 @Composable
-private fun TextBubble(item: TextItem) {
+private fun TextBubble(item: TextItem, onRetry: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
     val outgoing = item.direction == Direction.OUT
+    val clipboard = LocalClipboardManager.current
+    val haptic = LocalHapticFeedback.current
+    var copied by remember(item.id) { mutableStateOf(false) }
+    // 复制反馈只停留一小会，不占聊天记录
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(1_600)
+            copied = false
+        }
+    }
+    val shape = if (outgoing) RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp)
+    else RoundedCornerShape(20.dp, 20.dp, 20.dp, 6.dp)
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (outgoing) Arrangement.End else Arrangement.Start,
     ) {
-        Surface(
-            shape = if (outgoing) RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp)
-            else RoundedCornerShape(20.dp, 20.dp, 20.dp, 6.dp),
-            color = if (outgoing) scheme.primary else scheme.surfaceVariant,
-            modifier = Modifier.widthIn(max = 300.dp),
-        ) {
-            Text(
-                text = item.text,
-                style = MaterialTheme.typography.bodyLarge,
-                color = if (outgoing) scheme.onPrimary else scheme.onSurface,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-            )
+        Column(horizontalAlignment = if (outgoing) Alignment.End else Alignment.Start) {
+            Surface(
+                shape = shape,
+                color = if (outgoing) scheme.primary else scheme.surfaceVariant,
+                modifier = Modifier
+                    .widthIn(max = 300.dp)
+                    .clip(shape)
+                    .clickable {
+                        // 收到的文字和链接都只做复制，不当文件落盘
+                        clipboard.setText(AnnotatedString(item.text))
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        copied = true
+                    },
+            ) {
+                Text(
+                    text = item.text,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = if (outgoing) scheme.onPrimary else scheme.onSurface,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                )
+            }
+            // 收到的一律提示可以复制；自己发的显示送达状态，超时未确认给一个重发按钮
+            val hint = when {
+                copied -> "已复制"
+                !outgoing -> "点击可复制"
+                else -> when (item.delivery) {
+                    TextDelivery.QUEUED -> "连接后自动发送"
+                    TextDelivery.SENDING -> "已发送，等待对方确认"
+                    TextDelivery.DELIVERED -> "已送达"
+                    TextDelivery.UNCONFIRMED -> "未确认"
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = hint,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = when {
+                        copied -> scheme.primary
+                        outgoing && item.delivery == TextDelivery.DELIVERED -> scheme.primary
+                        else -> scheme.onSurfaceVariant.copy(alpha = 0.65f)
+                    },
+                    modifier = Modifier.padding(start = 6.dp, top = 3.dp),
+                )
+                if (outgoing && item.delivery == TextDelivery.UNCONFIRMED) {
+                    // 圈箭头：重发同一段文字，id 不变，重新等 text-ack
+                    IconButton(
+                        onClick = onRetry,
+                        modifier = Modifier.size(28.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Refresh,
+                            contentDescription = "重发这条文字",
+                            tint = scheme.primary,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -547,8 +640,12 @@ private fun statusLine(item: TransferItem, outgoing: Boolean): String = when (it
         append(" · ${formatBytes(item.size)}")
         if (item.speed > 0) append(" · ${formatSpeed(item.speed)}")
     }
-    TransferStatus.DONE -> if (outgoing) "已送达 · 对方确认收齐"
-    else "已保存到下载 · 点按打开"
+    TransferStatus.DONE -> when {
+        outgoing -> "已送达 · 对方确认收齐"
+        // 没有落盘地址的完成记录不算「已保存」：老版本可能把文字也标成了传输
+        item.uri != null -> "已保存到下载 · 点按打开"
+        else -> "已收到"
+    }
     TransferStatus.ERROR -> item.message ?: if (outgoing) "发送失败" else "接收失败"
 }
 
@@ -558,14 +655,19 @@ private fun EmptyConversation(
     reason: String?,
     peerOnline: Boolean,
     fingerprint: String?,
+    quiet: Boolean,
+    autoRetrying: Boolean,
+    retryAttempt: Int,
     onRetry: () -> Unit,
+    onCancelReconnect: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
     val ready = phase == SessionPhase.READY
-    val failed = phase == SessionPhase.FAILED
-    val idle = phase == SessionPhase.IDLE
-    // 只有确实能连的时候才给按钮：对方离线时按了也是白按
-    val canRetry = failed || (idle && peerOnline)
+    val failed = phase == SessionPhase.FAILED && !quiet
+    val idle = phase == SessionPhase.IDLE && !quiet
+    val recovering = quiet && !ready
+    // 只有确实能连、且不是静默恢复的时候才给按钮
+    val canRetry = !quiet && (failed || (idle && peerOnline))
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -599,6 +701,10 @@ private fun EmptyConversation(
                     tint = scheme.error,
                     modifier = Modifier.size(30.dp),
                 )
+                recovering -> CircularProgressIndicator(
+                    modifier = Modifier.size(26.dp),
+                    strokeWidth = 2.5.dp,
+                )
                 idle -> Icon(
                     imageVector = Icons.Rounded.LinkOff,
                     contentDescription = null,
@@ -615,6 +721,7 @@ private fun EmptyConversation(
         Text(
             text = when {
                 ready -> "连接好了"
+                recovering -> "正在恢复连接"
                 failed -> "连接失败"
                 idle && peerOnline -> "还没有连接"
                 idle -> "对方上线后会自动连回来"
@@ -627,6 +734,11 @@ private fun EmptyConversation(
         Text(
             text = when {
                 ready -> "已验签 · 点对点加密。\n发个文件，或说句话，内容只在两台设备之间走。"
+                recovering -> if (autoRetrying) {
+                    "自动重连第 $retryAttempt 次，连上后排队的内容会自动发出。"
+                } else {
+                    "亮屏或网络恢复后会自动连回来，这期间发送的内容会先排队。"
+                }
                 failed -> reason ?: "点对点连接断了"
                 idle && peerOnline -> "点下面重新连一次。"
                 idle -> "等对方上线后会自动连回来。"
@@ -638,7 +750,11 @@ private fun EmptyConversation(
         )
         if (canRetry) {
             Spacer(Modifier.height(18.dp))
-            Button(onClick = onRetry) { Text(if (failed) "重试" else "连接") }
+            if (failed && autoRetrying) {
+                TextButton(onClick = onCancelReconnect) { Text("取消重连") }
+            } else {
+                Button(onClick = onRetry) { Text(if (failed) "重试" else "连接") }
+            }
         }
         if (ready && fingerprint != null) {
             Spacer(Modifier.height(18.dp))
@@ -656,7 +772,10 @@ private fun ConnectionBanner(
     phase: SessionPhase,
     detail: String?,
     peerOnline: Boolean,
+    autoRetrying: Boolean,
+    retryAttempt: Int,
     onRetry: () -> Unit,
+    onCancelReconnect: () -> Unit,
     onCancel: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -706,6 +825,8 @@ private fun ConnectionBanner(
                         SessionPhase.SIGNALING -> "通过服务器交换连接信息"
                         SessionPhase.ICE -> "优先走局域网，走不通再走外网"
                         SessionPhase.AUTH -> "确认对方就是配对过的那台设备"
+                        SessionPhase.FAILED ->
+                            if (autoRetrying) "自动重连第 $retryAttempt 次" else "点重试再来一次"
                         SessionPhase.IDLE -> if (peerOnline) {
                             "点重试再来一次。"
                         } else {
@@ -722,7 +843,12 @@ private fun ConnectionBanner(
             }
             Spacer(Modifier.size(6.dp))
             if (failed) {
-                Button(onClick = onRetry) { Text("重试") }
+                // 自动重连中给「取消重连」，用户按下才停下；否则才给「重试」
+                if (autoRetrying) {
+                    TextButton(onClick = onCancelReconnect) { Text("取消重连") }
+                } else {
+                    Button(onClick = onRetry) { Text("重试") }
+                }
             } else {
                 TextButton(onClick = onCancel) { Text("取消") }
             }

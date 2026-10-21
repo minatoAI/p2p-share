@@ -52,6 +52,8 @@ interface TransferHandlers {
     fun onProgress(id: String, direction: Direction, transferred: Long, size: Long)
     fun onText(id: String, text: String)
     fun onArtifact(id: String, artifact: ReceivedArtifact)
+    /** 对端确认收到文字；老版本对端不会发这条 */
+    fun onTextAck(id: String) {}
     fun log(line: String) {}
 }
 
@@ -333,10 +335,15 @@ class TransferEngine(
             is Ack -> onAck(message.id, message.received)
             is Cancel -> handleCancel(message)
             is TextMessage -> {
+                // 文字只进文字列表，别再造一条「文件已完成」的传输记录：
+                // 那会让界面多出一张「已保存到下载」的卡片，用户以为存了文件。
                 handlers.onText(message.id, message.text)
-                handlers.onStatus(
-                    TransferUpdate(message.id, Direction.IN, TransferStatus.DONE, peerId),
-                )
+                // 回执用收到的 text 帧 id；老版本对端会忽略这条不认识的帧
+                send(TextAck(message.id))
+            }
+            is TextAck -> {
+                // 迟到或重复的确认由会话层忽略，这里只管转交
+                handlers.onTextAck(message.id)
             }
             is ControlError -> {
                 if (message.id != null) {
