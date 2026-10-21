@@ -35,6 +35,25 @@ adb shell "CLASSPATH=/data/local/tmp/tcpbench.dex app_process /system/bin TcpBen
 `TcpBench` 默认把 socket 收发缓冲设成 4 MB，按 1 MB 块读写，不落盘；它量的是网络和手机
 系统调用层的上限，不是 App 业务路径。
 
+## TLS 1.3 + TCP 备选基线
+
+局域网直连方案的安全版本，用来验证加密后的吞吐是否还够：
+
+```bash
+bash bench/tls-gen.sh             # 生成自签证书
+bash bench/android/build-tls.sh  # 编译并推送 TlsBench + 证书
+
+# 手机 → 电脑
+node bench/win/tls-sink.js 9443
+adb shell "CLASSPATH=/data/local/tmp/tlsbench.dex app_process /system/bin TlsBench send <电脑IP> 9443 100"
+
+# 电脑 → 手机
+adb shell "CLASSPATH=/data/local/tmp/tlsbench.dex app_process /system/bin TlsBench recv 9444 100"
+node bench/win/tls-source.js <手机IP> 9444
+```
+
+自签证书只给基准用，生产方案要用现有设备身份做 TLS 证书/公钥 pin。
+
 ## 2026-10-22 实测
 
 环境：Windows 11 + Realtek 8852BE（WiFi 6，协商 1201 Mbps），Xiaomi AX3000T 5G，
@@ -46,6 +65,8 @@ adb shell "CLASSPATH=/data/local/tmp/tcpbench.dex app_process /system/bin TcpBen
 | 手机 → 电脑，单条 TCP | 17.2 MB/s |
 | 手机 → 电脑，4 条 TCP 并发 | 21.3 MB/s |
 | 电脑 → 手机，单条 TCP | 20.2 MB/s |
+| 手机 → 电脑，TLS 1.3 + TCP | 16.4 MB/s |
+| 电脑 → 手机，TLS 1.3 + TCP | 21.3 MB/s |
 | 当前 App，安卓 → Windows | 12.9 MB/s |
 | 当前 App，Windows → 安卓 | 6.0–6.8 MB/s |
 
@@ -58,5 +79,6 @@ SCTP 在同样的 RTT 下受拥塞窗口和缓冲影响更明显。
 - **手机侧的物理上限大约 17–21 MB/s，不是电脑↔电脑的 70 MB/s。**
 - 安卓 → Windows 已经跑到 TCP 基线的约 75%，剩余空间不大；
 - Windows → 安卓只有 TCP 基线的约 30%，是主要优化点；
+- TLS 1.3 加密后仍有 16.4 / 21.3 MB/s，说明“局域网 TCP/TLS 直连”是可行备选；
 - 继续调 App 层分片/缓冲/落盘收益很小（实测在噪声内），要明显提升需要换传输方式
   （局域网 TCP/TLS 直连、QUIC，或 Android 上可调 SCTP 缓冲的 libdatachannel）。
