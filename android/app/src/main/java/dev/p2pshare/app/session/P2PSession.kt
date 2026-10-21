@@ -1083,7 +1083,19 @@ class P2PSession(context: Context) : ShareSessions {
                     conn.rtc == null &&
                     conn.waiter == null &&
                     _state.value.presence[conn.peerId] != false
-            if (!stillWanted) return@launch
+            if (!stillWanted) {
+                // 退避等待期间对方下线了：把「正在重连第 N 次」的临时状态收掉，
+                // 回到普通的离线态，别让会话页一直停在恢复中
+                if (conn.phase == SessionPhase.FAILED &&
+                    !screenOffline &&
+                    _state.value.presence[conn.peerId] == false
+                ) {
+                    conn.silent = false
+                    conn.autoRetries = 0
+                    setPhase(conn, SessionPhase.IDLE)
+                }
+                return@launch
+            }
             conn.silent = hideFailure(conn, attempt)
             log("自动重连 ${shortId(conn.peerId)}（第 $attempt 次）")
             connectPeer(conn.peerId)
