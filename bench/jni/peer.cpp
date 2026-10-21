@@ -133,10 +133,21 @@ void run_peer(const Options& options) {
             channel->onMessage([&, state](rtc::message_variant data) {
                 if (std::holds_alternative<rtc::binary>(data)) {
                     const auto& bytes = std::get<rtc::binary>(data);
+                    static FILE* save = nullptr;
+                    static bool save_checked = false;
+                    if (!save_checked) {
+                        save_checked = true;
+                        if (std::getenv("P2P_BENCH_SAVE")) {
+                            save = std::fopen("/sdcard/Download/p2p-bench.bin", "wb");
+                            BENCH_LOG("save file=%p", static_cast<void*>(save));
+                        }
+                    }
+                    if (save) std::fwrite(bytes.data(), 1, bytes.size(), save);
                     if (!state->started.exchange(true)) state->start = Clock::now();
                     const uint64_t total = static_cast<uint64_t>(options.megabytes) * 1024 * 1024;
                     const uint64_t now = state->bytes.fetch_add(bytes.size()) + bytes.size();
                     if (now >= total && !state->done.exchange(true)) {
+                        if (save) { std::fclose(save); save = nullptr; }
                         log_stats("recv", now, state->start);
                         if (dc && dc->isOpen()) dc->send("ack");
                     }
