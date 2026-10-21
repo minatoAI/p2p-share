@@ -206,9 +206,14 @@ bool authenticate(const std::shared_ptr<rtc::DataChannel>& dc, const Identity& i
 }
 
 bool send_text(const std::shared_ptr<rtc::DataChannel>& dc, const Identity& identity,
-               const std::string& text) {
+               const std::string& text, std::string* out_id) {
+    // 文字是一帧控制 JSON，不是文件：不带 meta，不占传输配额，对端也不会
+    // 因为它去开文件。"粘贴给对方"走的正是这条路，所以这里必须先把通道
+    // 状态查出来——send_json 在通道关掉时会静默丢掉，界面就永远停在"发送中"。
+    if (!dc || !dc->isOpen()) return false;
     const std::string id = identity.device_id().substr(0, 6) + "-" + random_b64(3);
     send_json(dc, {{"t", "text"}, {"id", id}, {"text", text}});
+    if (out_id) *out_id = id;
     std::cout << "已发文字（" << text.size() << " 字节）" << std::endl;
     return true;
 }
@@ -542,6 +547,10 @@ bool receive(const std::shared_ptr<rtc::DataChannel>& dc, MessageQueue* inbox,
         }
         if (t == "text") {
             const std::string text = parsed.value("text", "");
+            // 先回执再交给上层：回执是协议层的事，和界面怎么显示无关；早一步
+            // 发出去，对端的"已送达"就能早一步落定。老对端不认识 text-ack，
+            // 只会当成一条不认识的帧忽略掉，不会因此出错。
+            send_json(dc, {{"t", "text-ack"}, {"id", parsed.value("id", "")}});
             std::cout << "收到文字：" << text << std::endl;
             if (options->on_text) options->on_text(text);
             if (out) out->got_text = true;

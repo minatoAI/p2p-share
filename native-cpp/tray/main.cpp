@@ -15,6 +15,7 @@
 #include <dwmapi.h>
 #include <commdlg.h>
 #include <gdiplus.h>
+#include <objbase.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shlwapi.h>
@@ -37,6 +38,7 @@
 #include <functional>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 #include <ctime>
@@ -107,6 +109,8 @@ enum MenuId : UINT {
     kMenuAutostart,
     kMenuOpenUi,
     kMenuExit,
+    /** 排在最后：这些编号不落盘，新加的别插在中间，免得和旧的心理顺序对不上 */
+    kMenuCopyReceived,
 };
 
 // ---- 全局 ----
@@ -150,6 +154,29 @@ PairReply g_pair_reply;
 
 /** 连续收到的文件先攒一下，别一个文件弹一次气泡。只在界面线程访问。 */
 std::vector<std::wstring> g_received_files;
+
+/** "TaskbarCreated" 的注册消息号，资源管理器重启后靠它把托盘图标装回来。 */
+UINT g_taskbar_created = 0;
+
+/**
+ * 当前对端的显示名。
+ *
+ * 信令线程在 peer 事件里写、界面线程在发剪贴板和弹气泡时读，所以用锁护着。
+ * 用锁而不是 PostMessage：这里读的只是一行名字，锁的代价比多开一条消息更小，
+ * 也不会有"名字还没送到、记录已经写下去"的先后问题。
+ */
+std::mutex g_peer_mutex;
+std::wstring g_peer_display;
+
+void set_peer_display(const std::wstring& name) {
+    std::lock_guard<std::mutex> lock(g_peer_mutex);
+    g_peer_display = name;
+}
+
+std::wstring peer_display() {
+    std::lock_guard<std::mutex> lock(g_peer_mutex);
+    return g_peer_display;
+}
 
 bool g_page_ready = false;
 std::vector<std::string> g_outbox;
@@ -665,6 +692,244 @@ bool write_clipboard_text(const std::wstring& text) {
     return true;
 }
 
+// ---- 剪贴板：把收到的文件放进去 ----
+//
+// 安卓端发来一张图，人在电脑上按一次 Ctrl+V 就该贴进聊天框——这是"互传"里
+// 最顺的一步，但系统剪贴板没有"一个文件"这种格式，只有这几种：
+//   CF_HDROP   资源管理器 Ctrl+V、绝大多数桌面程序的"粘贴文件"认它
+//   CF_DIB     老的位图格式，只认它、不看文件清单的程序靠这个
+//   CF_DIBV5   带 alpha 的位图，Win10+ 的现代程序优先取它
+//   PNG        浏览器、Electron 系（微信、飞书、VS Code）优先取这个
+// 文件已经落盘了，CF_HDROP 只放路径清单，多大都不占内存；图片额外给位图和
+// PNG，因为"粘贴成图片"和"粘贴成文件"是两种用法，都得能走通。
+
+/** 剪贴板被别的进程占着时 OpenClipboard 会失败，这是常态而不是异常。重试几次。 */
+bool open_clipboard_retry() {
+    for (int attempt = 0; attempt < 5; attempt++) {
+        if (OpenClipboard(g_msg)) return true;
+        Sleep(20);
+    }
+    return false;
+}
+
+/** 往已经打开的剪贴板里放一块数据。成功后内存归剪贴板所有，不再由我们释放。 */
+bool put_clipboard_blob(UINT format, const void* data, size_t bytes) {
+    if (!data || !bytes) return false;
+    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if (!memory) return false;
+    if (void* target = GlobalLock(memory)) {
+        std::memcpy(target, data, bytes);
+        GlobalUnlock(memory);
+    } else {
+        GlobalFree(memory);
+        return false;
+    }
+    if (!SetClipboardData(format, memory)) {
+        GlobalFree(memory);
+        return false;
+    }
+    return true;
+}
+
+/** 小写扩展名，带点。只处理 ASCII 就够了，文件扩展名不会有别的。 */
+std::wstring lower_extension(const fs::path& path) {
+    std::wstring ext = path.extension().wstring();
+    for (auto& ch : ext) {
+        if (ch >= L'A' && ch <= L'Z') ch = static_cast<wchar_t>(ch - L'A' + L'a');
+    }
+    return ext;
+}
+
+/** 这几个扩展名交给 GDI+ 解码。webp/heic 要靠系统解码器，解不开就只放文件。 */
+bool looks_like_image(const fs::path& path) {
+    const std::wstring ext = lower_extension(path);
+    static const wchar_t* kImageExts[] = {L".png", L".jpg",  L".jpeg", L".bmp",
+                                          L".gif", L".tif", L".tiff"};
+    for (const auto* candidate : kImageExts) {
+        if (ext == candidate) return true;
+    }
+    return false;
+}
+
+/**
+ * 把图片解码成顶朝下、32 位 BGRA 的像素缓冲。
+ *
+ * 位图在剪贴板里是"倒着存"的：结构头之后的第一行是最下面那一行。GDI+ 给的是
+ * 从上往下，所以这里顺手翻一次，后面两种 DIB 格式都能直接用这块缓冲。
+ */
+bool decode_image_argb(const fs::path& path, int* width, int* height,
+                       std::vector<unsigned char>* pixels) {
+    Gdiplus::Bitmap image(path.c_str());
+    if (image.GetLastStatus() != Gdiplus::Ok) return false;
+    const int w = static_cast<int>(image.GetWidth());
+    const int h = static_cast<int>(image.GetHeight());
+    // 上限是防呆：真给一张两万像素见方的图，光拷贝就要几 GB
+    if (w <= 0 || h <= 0 || w > 16384 || h > 16384) return false;
+    Gdiplus::Rect rect(0, 0, w, h);
+    Gdiplus::BitmapData data = {};
+    if (image.LockBits(&rect, Gdiplus::ImageLockModeRead, PixelFormat32bppARGB, &data) !=
+        Gdiplus::Ok) {
+        return false;
+    }
+    const size_t stride = static_cast<size_t>(w) * 4;
+    pixels->assign(stride * static_cast<size_t>(h), 0);
+    for (int y = 0; y < h; y++) {
+        const auto* row = static_cast<const unsigned char*>(data.Scan0) +
+                          static_cast<std::ptrdiff_t>(y) * data.Stride;
+        std::memcpy(pixels->data() + (static_cast<size_t>(h) - 1 - y) * stride, row, stride);
+    }
+    image.UnlockBits(&data);
+    *width = w;
+    *height = h;
+    return true;
+}
+
+/** 24 位 BI_RGB 的 DIB。逐行 4 字节对齐，alpha 直接丢掉——只认老 DIB 的程序
+ *  拿到带 0 alpha 的 32 位图会画成一片黑，24 位最稳。 */
+bool build_dib24(const std::vector<unsigned char>& argb, int w, int h, std::string* out) {
+    const size_t stride = ((static_cast<size_t>(w) * 3) + 3) & ~static_cast<size_t>(3);
+    const size_t body = stride * static_cast<size_t>(h);
+    out->assign(sizeof(BITMAPINFOHEADER) + body, '\0');
+    auto* header = reinterpret_cast<BITMAPINFOHEADER*>(out->data());
+    header->biSize = sizeof(BITMAPINFOHEADER);
+    header->biWidth = w;
+    header->biHeight = h;
+    header->biPlanes = 1;
+    header->biBitCount = 24;
+    header->biCompression = BI_RGB;
+    header->biSizeImage = static_cast<DWORD>(body);
+    unsigned char* pixels =
+        reinterpret_cast<unsigned char*>(out->data()) + sizeof(BITMAPINFOHEADER);
+    for (int y = 0; y < h; y++) {
+        const unsigned char* source = argb.data() + static_cast<size_t>(y) * w * 4;
+        unsigned char* target = pixels + static_cast<size_t>(y) * stride;
+        for (int x = 0; x < w; x++) {
+            target[x * 3 + 0] = source[x * 4 + 0];
+            target[x * 3 + 1] = source[x * 4 + 1];
+            target[x * 3 + 2] = source[x * 4 + 2];
+        }
+    }
+    return true;
+}
+
+/** 32 位 BI_BITFIELDS 的 DIBV5，带 alpha。GDI+ 的 BGRA 顺序正好对上这组掩码。 */
+bool build_dibv5(const std::vector<unsigned char>& argb, int w, int h, std::string* out) {
+    const size_t body = static_cast<size_t>(w) * 4 * static_cast<size_t>(h);
+    out->assign(sizeof(BITMAPV5HEADER) + body, '\0');
+    auto* header = reinterpret_cast<BITMAPV5HEADER*>(out->data());
+    header->bV5Size = sizeof(BITMAPV5HEADER);
+    header->bV5Width = w;
+    header->bV5Height = h;
+    header->bV5Planes = 1;
+    header->bV5BitCount = 32;
+    header->bV5Compression = BI_BITFIELDS;
+    header->bV5SizeImage = static_cast<DWORD>(body);
+    header->bV5RedMask = 0x00FF0000;
+    header->bV5GreenMask = 0x0000FF00;
+    header->bV5BlueMask = 0x000000FF;
+    header->bV5AlphaMask = 0xFF000000;
+    header->bV5CSType = LCS_WINDOWS_COLOR_SPACE;
+    std::memcpy(out->data() + sizeof(BITMAPV5HEADER), argb.data(), body);
+    return true;
+}
+
+/**
+ * 图片的 PNG 字节。
+ *
+ * 文件本来就是 png 就直接读，省一次解码再编码；别的格式用 GDI+ 转一道。
+ * 走内存流而不是临时文件：临时文件要么留在盘上，要么还得管谁来删。
+ */
+bool png_bytes(const fs::path& path, std::string* out) {
+    const std::wstring ext = lower_extension(path);
+    if (ext == L".png") {
+        std::ifstream in(path, std::ios::binary);
+        if (!in) return false;
+        out->assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        return !out->empty();
+    }
+
+    Gdiplus::Bitmap image(path.c_str());
+    if (image.GetLastStatus() != Gdiplus::Ok) return false;
+    CLSID clsid = {};
+    if (png_encoder_clsid(&clsid) < 0) return false;
+    ComPtr<IStream> stream;
+    if (FAILED(CreateStreamOnHGlobal(nullptr, TRUE, stream.GetAddressOf()))) return false;
+    if (image.Save(stream.Get(), &clsid, nullptr) != Gdiplus::Ok) return false;
+    // GDI+ 存完会把流指针绕回开头，这里要的是长度，不是位置
+    STATSTG stat = {};
+    if (FAILED(stream->Stat(&stat, STATFLAG_NONAME))) return false;
+    const ULONGLONG size = stat.cbSize.QuadPart;
+    if (!size) return false;
+    HGLOBAL memory = nullptr;
+    if (FAILED(GetHGlobalFromStream(stream.Get(), &memory)) || !memory) return false;
+    const auto* bytes = static_cast<const char*>(GlobalLock(memory));
+    if (!bytes) return false;
+    out->assign(bytes, static_cast<size_t>(size));
+    GlobalUnlock(memory);
+    return true;
+}
+
+/**
+ * 收到的文件放进剪贴板。返回 false 表示没放进去（没开设置、剪贴板被占了、
+ * 图片解不开……），调用方只该记一条日志——文件落盘和这件事完全无关。
+ */
+bool write_clipboard_files(const std::vector<fs::path>& files) {
+    if (files.empty()) return false;
+
+    // CF_HDROP 是一份"双 \0 结尾"的宽字符路径清单，前面顶一个 DROPFILES 头。
+    // fWide 必须为 TRUE，否则系统按 ANSI 解析，中文路径会变成乱码。
+    std::wstring listing;
+    for (const auto& file : files) {
+        listing += file.wstring();
+        listing.push_back(L'\0');
+    }
+    listing.push_back(L'\0');
+    const size_t header_bytes = sizeof(DROPFILES);
+    const size_t listing_bytes = listing.size() * sizeof(wchar_t);
+    std::string drop;
+    drop.assign(header_bytes + listing_bytes, '\0');
+    auto* info = reinterpret_cast<DROPFILES*>(drop.data());
+    info->pFiles = static_cast<DWORD>(sizeof(DROPFILES));
+    info->fWide = TRUE;
+    // 路径清单紧跟在 DROPFILES 头后面，偏移量就是 pFiles
+    std::memcpy(drop.data() + header_bytes, listing.data(), listing_bytes);
+
+    // 单张图片才补位图和 PNG：位图格式表达不了"好几个文件"
+    std::string dib24;
+    std::string dibv5;
+    std::string png;
+    bool has_image = false;
+    if (files.size() == 1 && looks_like_image(files.front())) {
+        int width = 0;
+        int height = 0;
+        std::vector<unsigned char> pixels;
+        if (decode_image_argb(files.front(), &width, &height, &pixels)) {
+            build_dib24(pixels, width, height, &dib24);
+            build_dibv5(pixels, width, height, &dibv5);
+            has_image = true;
+            png_bytes(files.front(), &png);
+        }
+    }
+
+    if (!open_clipboard_retry()) {
+        log_line("[剪贴板] 打不开剪贴板，收到的文件没放进去");
+        return false;
+    }
+    EmptyClipboard();
+    bool ok = put_clipboard_blob(CF_HDROP, drop.data(), drop.size());
+    if (has_image) {
+        // 三种都放，谁能用谁用；SetClipboardData 会拷贝数据，同一份缓冲可以放多次
+        put_clipboard_blob(CF_DIB, dib24.data(), dib24.size());
+        put_clipboard_blob(CF_DIBV5, dibv5.data(), dibv5.size());
+        if (!png.empty()) {
+            const UINT format = RegisterClipboardFormatW(L"PNG");
+            if (format) put_clipboard_blob(format, png.data(), png.size());
+        }
+    }
+    CloseClipboard();
+    return ok;
+}
+
 // ---- 托盘 ----
 
 std::wstring tray_tip() {
@@ -981,6 +1246,7 @@ nlohmann::json settings_snapshot() {
     message["deviceName"] = g_settings.device_name;
     message["notifySound"] = g_settings.notify_sound;
     message["autoSync"] = g_settings.auto_sync_clipboard;
+    message["copyReceivedFiles"] = g_settings.copy_received_files;
     message["autostart"] = autostart_enabled();
     message["sendto"] = shell::sendto_installed(kSendToName);
 
@@ -1133,6 +1399,8 @@ HMENU build_menu() {
                 kMenuSendTo, L"加入「发送到」菜单");
     AppendMenuW(menu, MF_STRING | (g_settings.auto_sync_clipboard ? MF_CHECKED : 0),
                 kMenuAutoSync, L"剪贴板自动同步");
+    AppendMenuW(menu, MF_STRING | (g_settings.copy_received_files ? MF_CHECKED : 0),
+                kMenuCopyReceived, L"收到文件后放到剪贴板");
     AppendMenuW(menu, MF_STRING | (autostart_enabled() ? MF_CHECKED : 0), kMenuAutostart,
                 L"开机自启");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
@@ -1190,6 +1458,15 @@ void handle_menu(UINT command) {
                 nlohmann::json{{"t", "autosync"},
                                {"on", g_settings.auto_sync_clipboard}}
                     .dump());
+            break;
+        case kMenuCopyReceived:
+            g_settings.copy_received_files = !g_settings.copy_received_files;
+            try {
+                p2p::save_settings(g_session_dir, g_settings);
+            } catch (const std::exception&) {
+            }
+            // 页面上的设置项要跟着变，否则菜单勾上了、设置页里还是关的
+            post_to_page(state_message().dump());
             break;
         case kMenuAutostart: {
             const bool target = !autostart_enabled();
@@ -1395,11 +1672,18 @@ void on_page_message(const std::string& json) {
             }
         }
         if (!text.empty()) {
+            // 只有 fromClip 这条路页面拿不到内容（内容是原生现读的），所以先把
+            // 这一条"发送中"送回页面，再真正发出去：发送线程一旦写出帧就会发
+            // text-frame-sent，这两条消息必须按这个先后到达，否则页面上会先有
+            // 一条"等对方确认"、再冒出一条"发送中"，同一次发送变成两条记录。
+            if (from_clipboard) {
+                nlohmann::json record{{"t", "text-sending"},
+                                      {"text", text},
+                                      {"device", utf16_to_utf8(peer_display())}};
+                post_to_page(record.dump());
+            }
             if (g_session) g_session->send_text(text);
             log_line("[会话] 发文字 " + std::to_string(text.size()) + " 字节");
-            if (from_clipboard) {
-                post_to_page(R"({"t":"toast","text":"已把剪贴板发给对方"})");
-            }
         }
         return;
     }
@@ -1440,6 +1724,18 @@ void on_page_message(const std::string& json) {
             p2p::save_settings(g_session_dir, g_settings);
         } catch (const std::exception&) {
         }
+        post_to_page(state_message().dump());
+        return;
+    }
+    if (type == "set-copy-received") {
+        // 「收到文件后放到剪贴板」：关掉之后只是不再写剪贴板，接收和落盘完全不受影响
+        g_settings.copy_received_files = message.value("on", true);
+        try {
+            p2p::save_settings(g_session_dir, g_settings);
+        } catch (const std::exception&) {
+        }
+        log_line(std::string("[设置] 收到文件放剪贴板：") +
+                 (g_settings.copy_received_files ? "开" : "关"));
         post_to_page(state_message().dump());
         return;
     }
@@ -1563,6 +1859,17 @@ LRESULT CALLBACK popup_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
 }
 
 LRESULT CALLBACK msg_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+    // 资源管理器重启时会广播 TaskbarCreated，之前装进去的托盘图标全都没了。
+    // 不处理的话 installed_ 还是 true，之后的 NIF_INFO 都发向一个不存在的图标，
+    // 用户那边就是"只有声音、没有通知"。
+    if (g_taskbar_created && message == g_taskbar_created) {
+        log_line("[托盘] 任务栏重建，重新装图标");
+        const HICON icon = g_state.save_path.empty() ? g_icon_badge : g_icon;
+        if (!g_tray.install(g_msg, kTrayCallback, tray_tip(), icon ? icon : g_icon)) {
+            log_line("[托盘] 任务栏重建后图标没装回来");
+        }
+        return 0;
+    }
     switch (message) {
         case kTrayCallback:
             // 版本 4 把事件放在 LOWORD(lParam)：单击是 NIN_SELECT，
@@ -1635,7 +1942,8 @@ LRESULT CALLBACK msg_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
             auto* path = reinterpret_cast<std::wstring*>(lparam);
             g_received_files.push_back(*path);
             delete path;
-            if (g_tray.installed()) SetTimer(hwnd, kReceiveNotifyTimer, 700, nullptr);
+            // 托盘没装上也照样起定时器：攒批之后剪贴板要写，这件事和气泡无关。
+            SetTimer(hwnd, kReceiveNotifyTimer, 700, nullptr);
             return 0;
         }
         case kErrorEvent: {
@@ -1669,20 +1977,46 @@ LRESULT CALLBACK msg_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
         case WM_TIMER:
             if (wparam == kReceiveNotifyTimer) {
                 KillTimer(hwnd, kReceiveNotifyTimer);
-                if (!g_received_files.empty() && g_tray.installed()) {
+                if (!g_received_files.empty()) {
+                    // 攒批：一次发好几个文件只写一次剪贴板、只弹一个气泡
+                    std::vector<fs::path> files;
+                    files.reserve(g_received_files.size());
+                    for (const auto& item : g_received_files) files.emplace_back(item);
+                    const std::wstring last = fs::path(g_received_files.back()).filename().wstring();
                     const size_t count = g_received_files.size();
-                    std::wstring title = count == 1
-                                             ? L"收到一个文件"
-                                             : L"收到 " + std::to_wstring(count) + L" 个文件";
-                    std::wstring body = fs::path(g_received_files.back()).filename().wstring();
-                    if (count > 1) body += L" 等";
-                    if (!g_state.save_path.empty()) {
-                        body += L"\n保存在 " + g_state.save_path;
-                    }
-                    g_balloon_action = BalloonAction::OpenSaveDir;
-                    g_tray.notify(title, body,
-                                  shell::sound_from_name(g_settings.notify_sound));
                     g_received_files.clear();
+
+                    // 放进剪贴板：用户在电脑上按一次 Ctrl+V 就能贴进输入框。
+                    // 单独开一条线程，解码大图加转 PNG 要几百毫秒，卡在界面线程上
+                    // 小窗会跟着顿一下；失败也只是少一份方便，文件早就落盘了。
+                    if (g_settings.copy_received_files) {
+                        std::thread([files]() {
+                            if (!write_clipboard_files(files)) {
+                                log_line("[剪贴板] 收到的文件没能放进剪贴板（不影响落盘）");
+                            }
+                        }).detach();
+                    }
+
+                    if (g_tray.installed()) {
+                        // 标题说"收到了什么"，正文说"谁发的、放哪儿"：通知中心和
+                        // 横幅上标题先被看到，文件名放标题里才不会漏。
+                        const std::wstring title =
+                            count == 1 ? L"收到 " + last
+                                       : L"收到 " + std::to_wstring(count) + L" 个文件";
+                        std::wstring body = L"来自 " + peer_display();
+                        if (count > 1) body += L"：" + last + L" 等";
+                        if (!g_state.save_path.empty()) body += L"\n已放进 " + g_state.save_path;
+                        g_balloon_action = BalloonAction::OpenSaveDir;
+                        if (!g_tray.notify(title, body,
+                                           shell::sound_from_name(g_settings.notify_sound))) {
+                            // 声音照放，但通知没弹出来这件事得留个痕迹，
+                            // 否则用户只会说"怎么只有声音"。
+                            log_line("[托盘] 收到文件的气泡没弹出来");
+                        } else {
+                            // 成功也留一行：查"用户说没看到通知"时，先要知道到底发没发出去
+                            log_line("[托盘] 收到文件的气泡已发出");
+                        }
+                    }
                 }
                 return 0;
             }
@@ -2180,6 +2514,73 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
             std::ofstream probe(g_base_dir / L"clipboard-probe.json", std::ios::binary);
             probe << items.dump(2);
             return 0;
+        } else if (flag == L"--probe-copy" && i + 1 < argc) {
+            // 自检：把给定文件按"收到文件"的方式放进剪贴板，再把剪贴板上实际有的
+            // 格式原样读回来。没有对端也能验 CF_HDROP / DIB / PNG 到底写没写进去。
+            const std::wstring target = argv[++i];
+            g_base_dir = pick_base_dir();
+            nlohmann::json report{{"t", "copy-probe"}, {"file", utf16_to_utf8(target)}};
+            report["ok"] = write_clipboard_files({fs::path(target)});
+            report["formats"] = nlohmann::json::array();
+            if (OpenClipboard(nullptr)) {
+                UINT format = 0;
+                while ((format = EnumClipboardFormats(format)) != 0) {
+                    wchar_t name[128] = {};
+                    if (GetClipboardFormatNameW(format, name, 128) > 0) {
+                        report["formats"].push_back(
+                            {{"id", format}, {"name", utf16_to_utf8(name)}});
+                    } else {
+                        report["formats"].push_back({{"id", format}});
+                    }
+                }
+                if (HANDLE handle = GetClipboardData(CF_HDROP)) {
+                    if (auto drop = static_cast<HDROP>(handle)) {
+                        const UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+                        nlohmann::json paths = nlohmann::json::array();
+                        for (UINT index = 0; index < count; index++) {
+                            const UINT length = DragQueryFileW(drop, index, nullptr, 0);
+                            std::wstring path(length + 1, 0);
+                            DragQueryFileW(drop, index, path.data(), length + 1);
+                            path.resize(length);
+                            paths.push_back(utf16_to_utf8(path));
+                        }
+                        report["hdropCount"] = count;
+                        report["hdrop"] = paths;
+                    }
+                }
+                // 位图头也读回来：光有 CF_DIB 这个格式名不算数，宽高和位深对不上
+                // 粘贴出来就是一张空白或错位的图。
+                if (HANDLE handle = GetClipboardData(CF_DIB)) {
+                    if (const auto* bytes = static_cast<const BITMAPINFOHEADER*>(
+                            GlobalLock(handle))) {
+                        report["dib"] = {{"width", bytes->biWidth},
+                                         {"height", bytes->biHeight},
+                                         {"bitCount", bytes->biBitCount},
+                                         {"compression", bytes->biCompression}};
+                        GlobalUnlock(handle);
+                    }
+                }
+                if (HANDLE handle = GetClipboardData(CF_DIBV5)) {
+                    if (const auto* bytes = static_cast<const BITMAPV5HEADER*>(
+                            GlobalLock(handle))) {
+                        report["dibv5"] = {{"width", bytes->bV5Width},
+                                           {"height", bytes->bV5Height},
+                                           {"bitCount", bytes->bV5BitCount},
+                                           {"alphaMask", bytes->bV5AlphaMask}};
+                        GlobalUnlock(handle);
+                    }
+                }
+                const UINT png_format = RegisterClipboardFormatW(L"PNG");
+                if (png_format) {
+                    if (HANDLE handle = GetClipboardData(png_format)) {
+                        report["pngBytes"] = static_cast<uint64_t>(GlobalSize(handle));
+                    }
+                }
+                CloseClipboard();
+            }
+            std::ofstream probe(g_base_dir / L"clipboard-copy-probe.json", std::ios::binary);
+            probe << report.dump(2);
+            return 0;
         } else if (flag == L"--state-dir" && i + 1 < argc) {
             g_state_dir_override = argv[++i];
         } else if (flag == L"--send-text" && i + 1 < argc) {
@@ -2318,9 +2719,23 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
                     post_to_page(msg.dump());
                     return;
                 }
+                if (type == "peer") {
+                    // 记下当前对端叫什么：发剪贴板的记录和"收到 X，来自 Y"的气泡都要用它
+                    set_peer_display(utf8_to_utf16(msg.value("name", "")));
+                }
                 if (type == "text") {
                     nlohmann::json copy = msg;
                     copy["autoCopy"] = g_settings.auto_sync_clipboard;
+                    copy["from"] = utf16_to_utf8(peer_display());
+                    post_to_page(copy.dump());
+                    return;
+                }
+                if (type == "text-frame-sent" || type == "text-ack" || type == "text-unconfirmed" ||
+                    type == "text-failed") {
+                    // 文字的发送结果和"发给了谁"一起送回页面：页面上那条记录才会
+                    // 从「发送中」走到「已送达」/「未确认」，而不是只在 toast 里闪一下。
+                    nlohmann::json copy = msg;
+                    copy["device"] = utf16_to_utf8(peer_display());
                     post_to_page(copy.dump());
                     return;
                 }
@@ -2380,6 +2795,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
     g_scale = GetDpiForSystem() / 96.0;
     std::printf("[启动] 建窗\n");
     std::fflush(stdout);
+    // 这条注册消息在资源管理器重启时广播，见 msg_proc 开头
+    g_taskbar_created = RegisterWindowMessageW(L"TaskbarCreated");
     create_windows(instance);
     if (!g_msg || !g_popup) return 1;
     std::printf("[启动] 窗已建好\n");

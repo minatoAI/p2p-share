@@ -11,6 +11,7 @@
 #include <cctype>
 #include <chrono>
 #include <iostream>
+#include <utility>
 
 #include "pairing.h"
 #include "share_link.h"
@@ -969,7 +970,7 @@ void Session::signal_loop() {
                                  {"to", peer_id},
                                  {"code", outgoing_code_},
                                  {"name", settings_.device_name},
-                                 {"platform", "native"},
+                                 {"platform", p2p::kPlatformWindows},
                                  {"publicKey", write_jwk(identity_.public_jwk())}});
                 peer_name_ = peer_name;
                 // 公钥先存住，等 pair-response 回来建连时要用
@@ -1008,14 +1009,15 @@ void Session::signal_loop() {
                 // 再让用户核对 SAS——这两步少一步，"配对"就只是自报家门。
                 const std::string from = msg.value("from", "");
                 const std::string name = msg.value("name", "");
-                const std::string peer_platform = msg.value("platform", "");
+                const std::string peer_platform =
+                    p2p::normalize_platform(msg.value("platform", ""));
                 auto reject = [&](const std::string& reason) {
                     link_->send(json{{"t", "pair-response"},
                                      {"from", my_id},
                                      {"to", from},
                                      {"accepted", false},
                                      {"reason", reason},
-                                     {"platform", "native"}});
+                                     {"platform", p2p::kPlatformWindows}});
                     emit_state("error", reason);
                 };
                 if (!msg.contains("publicKey")) {
@@ -1053,7 +1055,7 @@ void Session::signal_loop() {
                                  {"from", my_id},
                                  {"to", from},
                                  {"accepted", true},
-                                 {"platform", "native"}});
+                                 {"platform", p2p::kPlatformWindows}});
                 send_watch_all(from);
                 add_contact(Contact{from, name, peer_key, peer_platform});
                 peer_name_ = name;
@@ -1076,7 +1078,8 @@ void Session::signal_loop() {
                 }
                 outgoing_code_.clear();
                 const std::string from = msg.value("from", "");
-                const std::string peer_platform = msg.value("platform", "");
+                const std::string peer_platform =
+                    p2p::normalize_platform(msg.value("platform", ""));
                 send_watch_all(from);
                 // 用码连过去的那一侧也要自己建一份 PeerConnection。
                 // 少了这一步，两端都以为对方会建通道，谁都不建，最后双双超时。
@@ -1202,6 +1205,11 @@ void Session::receive_loop(std::shared_ptr<rtc::DataChannel> channel, uint64_t g
             acks_.on_ack(frame.value("id", ""), frame.value("received", 0ULL));
             return true;
         }
+        if (t == "text-ack") {
+            // 对端确认收到一条文字：把待确认表里那条标成送达
+            handle_text_ack(frame.value("id", ""));
+            return true;
+        }
         if (t == "cancel") {
             const std::string id = frame.value("id", "");
             const std::string reason = frame.value("reason", "");
@@ -1287,6 +1295,9 @@ void Session::receive_loop(std::shared_ptr<rtc::DataChannel> channel, uint64_t g
 
 void Session::send_loop() {
     while (!stopping_) {
+        // 借这条循环当定时器：pop_request 最多等 200 毫秒，正好够给等确认的
+        // 文字判超时，不用再单开一条线程。
+        expire_pending_texts();
         Request request;
         if (!pop_request(&request, 200, true)) {
             if (stopping_) break;
@@ -1294,11 +1305,43 @@ void Session::send_loop() {
         }
 
         if (!channel_ready_.load() || !channel_) {
+            // 文字要单独回一条失败：界面上那条发送记录得从"发送中"变成"失败"，
+            // 只给一个 error 气泡的话，记录会永远停在发送中。文件不用，它本来
+            // 就没有"发送记录"这一行。
+            if (request.command == Command::SendText) {
+                emit_(json{{"t", "text-failed"},
+                           {"text", request.text},
+                           {"reason", "还没连上设备"}});
+            }
             emit_state("error", "还没连上设备，发不了");
             continue;
         }
         if (request.command == Command::SendText) {
-            p2p::send_text(channel_, identity_, request.text);
+            // 文字是控制帧：对端只会把它当一段文字显示，不会当成文件。
+            std::string id;
+            const bool sent = p2p::send_text(channel_, identity_, request.text, &id);
+            if (sent) {
+                {
+                    std::lock_guard<std::mutex> lock(text_mutex_);
+                    pending_texts_[id] = PendingText{request.text, p2p::now_ms() + 8000};
+                    // 正常情况下这张表里只有一两条。对端一条 ack 都不回又连着发
+                    // 几十条时它会一直长，到 32 条就按截止时间砍掉最早的一条腾地方
+                    // （截止时间跟发送顺序同向，"最早"就是最早发出去的那条）。
+                    while (pending_texts_.size() > 32) {
+                        auto oldest = pending_texts_.begin();
+                        for (auto it = pending_texts_.begin(); it != pending_texts_.end(); ++it) {
+                            if (it->second.deadline_ms < oldest->second.deadline_ms) oldest = it;
+                        }
+                        pending_texts_.erase(oldest);
+                    }
+                }
+                // 帧写出去了，但还不能说"送达"：等对端的 text-ack
+                emit_(json{{"t", "text-frame-sent"}, {"id", id}, {"text", request.text}});
+            } else {
+                emit_(json{{"t", "text-failed"},
+                           {"text", request.text},
+                           {"reason", "通道刚断开"}});
+            }
             continue;
         }
         for (const auto& path : request.paths) {
@@ -1354,6 +1397,45 @@ void Session::send_loop() {
                 emit_state("error", "发送失败：" + name);
             }
         }
+    }
+}
+
+void Session::handle_text_ack(const std::string& id) {
+    if (id.empty()) return;
+    std::string text;
+    {
+        std::lock_guard<std::mutex> lock(text_mutex_);
+        const auto found = pending_texts_.find(id);
+        // 不认识的 id 直接忽略：可能是重连之后姗姗来迟的一条，也可能对端
+        // 在确认一条我们已经判了超时的文字。两种情况都不该有什么动作。
+        if (found == pending_texts_.end()) return;
+        text = found->second.text;
+        pending_texts_.erase(found);
+    }
+    emit_(json{{"t", "text-ack"}, {"id", id}, {"text", text}});
+}
+
+void Session::expire_pending_texts() {
+    std::vector<std::pair<std::string, PendingText>> expired;
+    {
+        std::lock_guard<std::mutex> lock(text_mutex_);
+        const int64_t now = p2p::now_ms();
+        for (auto it = pending_texts_.begin(); it != pending_texts_.end();) {
+            if (it->second.deadline_ms <= now) {
+                expired.emplace_back(it->first, it->second);
+                it = pending_texts_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    for (const auto& item : expired) {
+        // 只是"对方没确认"，不是错误：老版本对端根本不回 ack，连接还好好的，
+        // 这里不能报到错状态里去，否则用户会以为发送失败了。
+        emit_(json{{"t", "text-unconfirmed"},
+                   {"id", item.first},
+                   {"text", item.second.text},
+                   {"reason", "对方没有确认"}});
     }
 }
 

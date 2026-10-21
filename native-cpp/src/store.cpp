@@ -84,6 +84,7 @@ Settings load_settings(const std::filesystem::path& dir) {
     out.auto_accept_paired = node.value("autoAcceptPaired", out.auto_accept_paired);
     out.notify_sound = node.value("notifySound", out.notify_sound);
     out.auto_sync_clipboard = node.value("autoSyncClipboard", out.auto_sync_clipboard);
+    out.copy_received_files = node.value("copyReceivedFiles", out.copy_received_files);
     return out;
 }
 
@@ -96,7 +97,8 @@ void save_settings(const std::filesystem::path& dir, const Settings& settings) {
                     {"lighthouse", settings.lighthouse},
                     {"autoAcceptPaired", settings.auto_accept_paired},
                     {"notifySound", settings.notify_sound},
-                    {"autoSyncClipboard", settings.auto_sync_clipboard}};
+                    {"autoSyncClipboard", settings.auto_sync_clipboard},
+                    {"copyReceivedFiles", settings.copy_received_files}};
     std::ofstream out(dir / L"settings.json", std::ios::binary | std::ios::trunc);
     if (!out) throw std::runtime_error("设置写不进去");
     out << node.dump(2) << "\n";

@@ -94,6 +94,7 @@ public:
     /** 发给当前对端。没配对过就报错。 */
     void send_files(const std::vector<std::string>& paths);
     void send_text(const std::string& text);
+
     /**
      * 取消一次正在进行的传输。incoming 表示是收进来的还是发出去的。
      * id 是进度事件里那个 id；对不上（已经结束了）就什么也不做。
@@ -156,6 +157,19 @@ private:
     /** 追加一条记录并发给界面 */
     void record(const std::string& direction, const std::string& path, uint64_t size,
                 const std::string& transfer_id = "");
+    /**
+     * 收到对端的 text-ack：把对应的待确认文字标成「已送达」。
+     * 不认识的 id 直接忽略——可能是一条迟到很久的确认。
+     */
+    void handle_text_ack(const std::string& id);
+    /**
+     * 清掉等不到确认的文字。
+     *
+     * 文字帧发出去不等于对方看见了：老版本对端根本不回 text-ack，网络也可能
+     * 刚好在这一刻断。等不到就只把记录标成"未确认"，不报错、不弹窗、更不
+     * 能卡住发送队列——连接还好好的，凭一条没回执的文字就说失败是误报。
+     */
+    void expire_pending_texts();
     void emit_devices();
     /** 把配对过的设备整个发给界面（重启后也在） */
     void emit_contacts();
@@ -175,7 +189,7 @@ private:
         std::string id;
         std::string name;
         p2p::PublicKeyJwk public_key;
-        /** web / native；旧记录没有这一项，空串表示不知道 */
+        /** windows / android / web；旧记录里可能是 native（两台旧端分不出来），空串表示不知道 */
         std::string platform;
     };
     void load_contacts();
@@ -272,6 +286,20 @@ private:
     std::atomic<bool> send_cancel_{false};
     std::atomic<bool> recv_cancel_{false};
     std::atomic<bool> channel_ready_{false};
+
+    /**
+     * 发出去、还没等到 text-ack 的文字。
+     *
+     * 收线程往里删（收到确认），发送线程往里加、并且负责超时清理，所以加锁。
+     * 按 id 索引：ack 里带的就是这个 id，同内容的文字发两次也不会认错。
+     */
+    struct PendingText {
+        std::string text;
+        /** 到这个时刻还没等到 ack 就标成"未确认" */
+        int64_t deadline_ms = 0;
+    };
+    std::mutex text_mutex_;
+    std::map<std::string, PendingText> pending_texts_;
     /**
      * 每建一次通道就加一。收线程退出时拿它判断自己守的还是不是当前那条：
      * 换连时旧线程会跟着旧通道一起结束，不能让它把新连接的状态改成"已断开"。

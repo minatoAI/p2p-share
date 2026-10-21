@@ -26,11 +26,13 @@
       { name: '我的手机', online: false },
     ],
     clips: [
-      { device: '办公室电脑', text: '2026 年第三季度复盘：托盘端、局域网直连、剪贴板同步三条主线。', meta: '2 分钟前' },
-      { device: '办公室电脑', text: 'https://p2p-share-web.pages.dev/s/9f3a2c', meta: '1 小时前' },
-      { device: '办公室电脑', text: 'HUAWEI-5G-8C21　密码 8842 1190', meta: '昨天' },
-      { device: '我的手机', text: '明天十点，老地方见', meta: '10 分钟前' },
-      { device: '我的手机', text: 'https://maps.example.com/q=31.23,121.47', meta: '昨天' },
+      { device: '办公室电脑', text: '2026 年第三季度复盘：托盘端、局域网直连、剪贴板同步三条主线。', time: '2 分钟前' },
+      { device: '办公室电脑', dir: 'out', status: 'sent', text: 'Wi-Fi：HUAWEI-5G-8C21　密码 8842 1190', time: '5 分钟前' },
+      { device: '办公室电脑', text: 'https://p2p-share-web.pages.dev/s/9f3a2c', time: '1 小时前' },
+      { device: '办公室电脑', dir: 'out', status: 'failed', text: '这段话没发出去，对方当时不在线', time: '昨天' },
+      { device: '办公室电脑', text: 'HUAWEI-5G-8C21　密码 8842 1190', time: '昨天' },
+      { device: '我的手机', text: '明天十点，老地方见', time: '10 分钟前' },
+      { device: '我的手机', text: 'https://maps.example.com/q=31.23,121.47', time: '昨天' },
     ],
     shares: [
       { name: '产品演示.mp4', size: '68.2 MB', time: '今天 14:02', downloads: 3, link: 'https://p2p-share-web.pages.dev/s/8f2c4a91' },
@@ -72,6 +74,7 @@
     notifySound: 'balloon',
     sounds: [],
     autosync: false,
+    copyReceived: true,
     autostart: false,
     sendto: false,
     pairAsk: null,
@@ -251,7 +254,29 @@
     $('fileList').hidden = state.tab !== 'files';
   }
 
-  /** 剪贴板只放对方发过来的文字；最新一条单独一张卡，其余进历史。 */
+  /**
+   * 剪贴板记录：收到的和「粘贴给对方」发出去的排在同一条时间线上。
+   *
+   * 发出去的那条必须留下来：只弹一个 toast 的话，一秒钟之后用户就再也看不到
+   * "刚才到底发没发出去、发给了谁"。所以每条都带目标设备、内容、状态。
+   */
+  function clipMeta(clip) {
+    const device = clip.device || '对方';
+    if (clip.dir === 'out') {
+      if (clip.status === 'sending') return `发给 ${device} · 发送中`;
+      if (clip.status === 'waiting') return `发给 ${device} · 等对方确认`;
+      if (clip.status === 'unconfirmed') return `发给 ${device} · 未确认，可重试`;
+      if (clip.status === 'failed') return `发给 ${device} · 发送失败`;
+      return `发给 ${device} · 已送达`;
+    }
+    return `来自 ${device} · ${clip.time || '刚刚'}`;
+  }
+
+  /** 记录只留最近的：再多也没人往下翻，长列表只会拖慢小窗。 */
+  function trimClips() {
+    if (state.clips.length > 40) state.clips.length = 40;
+  }
+
   function renderClips() {
     const list = $('clipList');
     list.innerHTML = '';
@@ -259,15 +284,24 @@
       ? state.clips
       : state.clips.filter((clip) => clip.device === state.target);
     if (!clips.length) {
-      list.append(el('div', 'empty', '对方还没发过文字'));
+      list.append(el('div', 'empty', '还没有文字记录。收到，或者点「粘贴给对方」都会记在这里'));
       return;
     }
     const row = (clip, latest) => {
-      const item = el('div', `row clip${latest ? ' latest' : ''}`);
+      const outgoing = clip.dir === 'out';
+      const failed = clip.status === 'failed';
+      const unconfirmed = clip.status === 'unconfirmed';
+      const item = el(
+        'div',
+        `row clip${latest ? ' latest' : ''}${outgoing ? ' out' : ''}` +
+          `${failed ? ' failed' : ''}${unconfirmed ? ' unconfirmed' : ''}`,
+      );
       const body = el('div', 'clip-body');
-      if (latest) body.append(el('span', 'clip-latest-label', '最新收到'));
+      if (latest) {
+        body.append(el('span', 'clip-latest-label', outgoing ? '刚发出去' : '最新收到'));
+      }
       body.append(el('span', 'clip-text', clip.text));
-      item.append(body, el('span', 'clip-meta', clip.meta));
+      item.append(body, el('span', 'clip-meta', clipMeta(clip)));
       item.title = '点击复制到这台电脑';
       item.addEventListener('click', () => {
         post({ t: 'copy', text: clip.text });
@@ -277,7 +311,7 @@
         clearTimeout(item.timer);
         item.timer = setTimeout(() => {
           item.classList.remove('flash');
-          meta.textContent = clip.meta;
+          meta.textContent = clipMeta(clip);
         }, 1200);
         toast('已复制到剪贴板');
       });
@@ -778,6 +812,7 @@
     $('setSavePathText').textContent = state.savePath || '选择文件夹…';
     $('setSavePath').title = state.savePath || '';
     $('setAutosync').checked = Boolean(state.autosync);
+    $('setCopyReceived').checked = state.copyReceived !== false;
     $('setAutostart').checked = Boolean(state.autostart);
     $('setSendto').checked = Boolean(state.sendto);
     const select = $('setSound');
@@ -895,6 +930,9 @@
     if (typeof message.savePath === 'string') state.savePath = message.savePath;
     if (typeof message.notifySound === 'string') state.notifySound = message.notifySound;
     if (typeof message.autoSync === 'boolean') state.autosync = message.autoSync;
+    if (typeof message.copyReceivedFiles === 'boolean') {
+      state.copyReceived = message.copyReceivedFiles;
+    }
     if (typeof message.autostart === 'boolean') state.autostart = message.autostart;
     if (typeof message.sendto === 'boolean') state.sendto = message.sendto;
     if (Array.isArray(message.sounds) && message.sounds.length) {
@@ -1421,6 +1459,13 @@
   // ---------- 剪贴板同步按钮 ----------
 
   /** 只同步文字：把本机剪贴板贴到对方。记录页只展示对方发来的内容。 */
+  /**
+   * 只同步文字：把本机剪贴板贴到对方。
+   *
+   * 真实模式下原生会现读剪贴板（内容页面拿不到），读完先把一条「发送中」的
+   * 记录推回来，再用 text-sent / text-failed 改成最终状态；所以这里不再自己
+   * 弹"已发送"的 toast，避免和原生那条重复，也避免说得比实际早。
+   */
   function pushToDevice() {
     const device = currentDevice();
     if (real) {
@@ -1428,7 +1473,6 @@
         toast('先在「添加设备」里配对，连上后再粘贴');
         return;
       }
-      // 内容和提示都交给原生：它会现读剪贴板，空的时候自己会说话。
       post({ t: 'send-text', fromClip: true });
       return;
     }
@@ -1437,7 +1481,17 @@
       return;
     }
     const text = state.myClip || '（示例）刚从这台设备复制的内容';
-    toast(`已同步到 ${device.name}`);
+    // 示例模式没有原生回执，自己把记录补上，界面长相和真实模式一致
+    state.clips.unshift({ dir: 'out', device: device.name, text, status: 'sending', time: '刚刚' });
+    trimClips();
+    renderClips();
+    setTimeout(() => {
+      const record = state.clips.find((item) => item.status === 'sending' && item.text === text);
+      if (record) record.status = 'sent';
+      trimClips();
+      renderClips();
+      toast(`已发送给 ${device.name}`);
+    }, 400);
   }
 
   // ---------- 原生消息 ----------
@@ -1453,6 +1507,9 @@
           state.devices = [{ name: state.deviceName, online: false }];
           // 不清 transfers/shares/clips：init 之前到达的快照要保留，
           // 页面刚打开时它们本来就是空的。
+          // 截图模式例外：真实数据是空的，用示例记录把剪贴板时间线撑起来，
+          // 否则截出来的图里只有一句"还没有文字记录"。
+          if (shot) state.clips = MOCK.clips.map((item) => ({ ...item }));
           state.target = state.deviceName;
           updateSendButton();
           render();
@@ -1479,7 +1536,9 @@
         if (forcedState) applyForcedState(forcedState);
         break;
       case 'shown': {
-        showView('home');
+        // 截图模式下别把窗口弹回首页：shots 就是用 --state 指定要截哪一页的，
+        // 弹回首页等于白截。
+        if (!(shot && forcedState && forcedState !== 'home')) showView('home');
         state.clipFiles = [];
         updateSendButton();
         // 只记下来用于"粘贴给对方"，不把它混进对方发来的记录里
@@ -1619,13 +1678,16 @@
       }
       case 'text': {
         const text = message.text || '';
+        const from = message.from || state.peerName || '对方';
         if (text) {
           state.clips.unshift({
-            device: state.peerName || '对方',
-            peer: state.peerName || '对方',
+            dir: 'in',
+            device: from,
+            peer: from,
             text,
-            meta: `来自 ${state.peerName || '对方'} · 刚刚`,
+            time: '刚刚',
           });
+          trimClips();
           renderClips();
           if (message.autoCopy) {
             post({ t: 'copy', text });
@@ -1634,6 +1696,96 @@
             toast('收到一段文字，点记录可以复制');
           }
         }
+        break;
+      }
+      case 'text-sending': {
+        // 原生现读了剪贴板（内容只有它知道），先落一条「发送中」
+        const text = message.text || '';
+        if (!text) break;
+        state.clips.unshift({
+          dir: 'out',
+          device: message.device || state.peerName || '对方',
+          text,
+          status: 'sending',
+          time: '刚刚',
+        });
+        trimClips();
+        renderClips();
+        break;
+      }
+      case 'text-frame-sent': {
+        // 帧写出去了，但对方还没确认。记下协议 id，后面的 text-ack 靠它配对。
+        const text = message.text || '';
+        let record = state.clips.find(
+          (item) => item.dir === 'out' && item.status === 'sending' && item.text === text,
+        );
+        if (!record) {
+          // 自动同步这类"页面没参与"的发送也要留一条，否则记录里凭空少一段
+          record = {
+            dir: 'out',
+            device: message.device || state.peerName || '对方',
+            text,
+            status: 'waiting',
+            time: '刚刚',
+          };
+          state.clips.unshift(record);
+          trimClips();
+        }
+        record.id = message.id || '';
+        record.status = 'waiting';
+        renderClips();
+        break;
+      }
+      case 'text-ack': {
+        // 对方回了确认，这条才算真的送达
+        const id = message.id || '';
+        const text = message.text || '';
+        const device = message.device || state.peerName || '对方';
+        const record =
+          state.clips.find((item) => item.dir === 'out' && id && item.id === id) ||
+          state.clips.find(
+            (item) => item.dir === 'out' && item.status !== 'sent' && item.text === text,
+          );
+        if (record) {
+          record.status = 'sent';
+          record.device = device;
+          renderClips();
+          toast(`已送达 ${device}`);
+        }
+        break;
+      }
+      case 'text-unconfirmed': {
+        // 8 秒没等到确认。不是错误：老版本对端压根不回 ack，所以只改记录状态，
+        // 不弹错误、也不影响连接。
+        const id = message.id || '';
+        const text = message.text || '';
+        const record =
+          state.clips.find((item) => item.dir === 'out' && id && item.id === id) ||
+          state.clips.find(
+            (item) => item.dir === 'out' && item.status !== 'sent' && item.text === text,
+          );
+        if (record && record.status !== 'sent') {
+          record.status = 'unconfirmed';
+          renderClips();
+        }
+        break;
+      }
+      case 'text-failed': {
+        // 通道根本没连上/已经断了，这条确实没发出去
+        const text = message.text || '';
+        const device = message.device || state.peerName || '对方';
+        let record = state.clips.find(
+          (item) => item.dir === 'out' && item.status !== 'sent' && item.text === text,
+        );
+        if (!record) {
+          record = { dir: 'out', device, text, time: '刚刚' };
+          state.clips.unshift(record);
+        }
+        record.status = 'failed';
+        record.device = device;
+        trimClips();
+        renderClips();
+        toast(`没发出去：${message.reason || '通道已经断开'}`);
         break;
       }
       case 'sent': {
@@ -1756,6 +1908,9 @@
       state.tab = 'files';
       showView('home');
       render();
+    } else if (name === 'settings') {
+      renderSettings();
+      showView('settings');
     } else if (name === 'devices') {
       showView('home');
       render();
@@ -1853,6 +2008,10 @@
     $('setAutosync').addEventListener('change', () => {
       state.autosync = $('setAutosync').checked;
       post({ t: 'set-sync', on: state.autosync });
+    });
+    $('setCopyReceived').addEventListener('change', () => {
+      state.copyReceived = $('setCopyReceived').checked;
+      post({ t: 'set-copy-received', on: state.copyReceived });
     });
     $('setAutostart').addEventListener('change', () => {
       state.autostart = $('setAutostart').checked;

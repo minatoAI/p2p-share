@@ -4,6 +4,23 @@
 
 namespace p2p {
 
+std::string normalize_platform(const std::string& raw) {
+    // 只做最保守的两件事：转小写、去掉首尾空白。不做"native 猜成 windows"这种
+    // 归一——旧版安卓也用 native，猜错了界面就会把手机显示成电脑。
+    auto space = [](unsigned char c) {
+        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+    };
+    size_t begin = 0;
+    size_t end = raw.size();
+    while (begin < end && space(static_cast<unsigned char>(raw[begin]))) ++begin;
+    while (end > begin && space(static_cast<unsigned char>(raw[end - 1]))) --end;
+    std::string out = raw.substr(begin, end - begin);
+    for (char& c : out) {
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    }
+    return out;
+}
+
 long long now_ms() {
     using namespace std::chrono;
     return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();

@@ -568,7 +568,9 @@ body.dragging {
   font-size: 11.5px;
 }
 
-.clip-head .btn {
+/* 选择器写成三档：.btn.secondary 里的 flex:1 会盖掉两档的 .clip-head .btn，
+ * 于是"粘贴给对方"被拉成一整条横杠，标题被挤没了。 */
+.clip-head .btn.secondary {
   flex: none;
   width: auto;
   height: 30px;
@@ -603,6 +605,36 @@ body.dragging {
 .clip {
   cursor: pointer;
   align-items: flex-start;
+}
+
+/* 发出去的那条：左边一道淡色竖线，和收到的记录一眼分得开 */
+.clip.out {
+  border-left: 2px solid color-mix(in oklab, var(--accent) 45%, transparent);
+}
+
+.clip.out .clip-latest-label {
+  color: var(--muted);
+}
+
+.clip.out .clip-meta {
+  color: color-mix(in oklab, var(--accent) 75%, var(--muted));
+}
+
+.clip.failed {
+  border-left-color: color-mix(in oklab, var(--danger) 55%, transparent);
+}
+
+.clip.failed .clip-meta {
+  color: var(--danger);
+}
+
+/* 未确认：对方一直没回执。不是错误，用警告色而不是红色 */
+.clip.unconfirmed {
+  border-left-color: color-mix(in oklab, var(--warn) 55%, transparent);
+}
+
+.clip.unconfirmed .clip-meta {
+  color: var(--warn);
 }
 
 /* ---------- 确认弹层 ---------- */

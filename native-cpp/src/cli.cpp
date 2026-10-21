@@ -131,7 +131,7 @@ bool advertise(SignalLink* link, const Identity& identity, bool auto_accept, Pai
                         {"from", identity.device_id()},
                         {"to", from},
                         {"accepted", auto_accept},
-                        {"platform", "native"}});
+                        {"platform", kPlatformWindows}});
         if (!auto_accept) {
             std::cerr << "没有自动接受，配对中止（原型阶段用 --auto-accept）" << std::endl;
             return false;
@@ -188,7 +188,7 @@ bool join(SignalLink* link, const Identity& identity, const std::string& my_name
                     {"to", peer_id},
                     {"code", code},
                     {"name", my_name},
-                    {"platform", "native"},
+                    {"platform", kPlatformWindows},
                     {"publicKey", write_jwk(identity.public_jwk())}});
 
     while (link->next(&msg, 120000)) {
