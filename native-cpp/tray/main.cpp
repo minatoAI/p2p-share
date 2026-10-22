@@ -1628,6 +1628,29 @@ void on_page_message(const std::string& json) {
         pick_and_share();
         return;
     }
+    if (type == "share-clipboard-files") {
+        std::vector<std::string> paths;
+        for (const auto& item : message.value("paths", nlohmann::json::array())) {
+            if (item.is_string() && !item.get<std::string>().empty()) {
+                paths.push_back(item.get<std::string>());
+            }
+        }
+        if (paths.empty()) {
+            post_to_page(nlohmann::json{{"t", "toast"}, {"text", "剪贴板里没有可分享的文件"}}.dump());
+            post_to_page(nlohmann::json{{"t", "share-cancelled"}}.dump());
+            return;
+        }
+        if (!g_session) {
+            post_to_page(nlohmann::json{{"t", "toast"}, {"text", "会话还没起来，稍后再试"}}.dump());
+            post_to_page(nlohmann::json{{"t", "share-cancelled"}}.dump());
+            return;
+        }
+        for (const auto& path : paths) {
+            g_session->share_file(path);
+            log_line("[会话] 从剪贴板创建分享链接：" + path);
+        }
+        return;
+    }
     if (type == "revoke-share") {
         const std::string token = message.value("token", "");
         if (g_session && !token.empty()) g_session->revoke_share(token);

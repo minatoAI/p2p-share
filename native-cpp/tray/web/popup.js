@@ -1200,6 +1200,7 @@
   /* ---------- 通用确认 ---------- */
 
   let confirmAction = null;
+  let cancelAction = null;
 
   function askConfirm({
     kicker = '确认',
@@ -1209,9 +1210,11 @@
     cancelText = '取消',
     danger = false,
     onOk,
+    onCancel,
   }) {
     closeMenu();
     confirmAction = onOk || null;
+    cancelAction = onCancel || null;
     $('confirmKicker').textContent = kicker;
     $('confirmTitle').textContent = title || '确定要这样做吗';
     $('confirmDesc').textContent = desc;
@@ -1226,9 +1229,10 @@
   function closeConfirm(confirmed) {
     if ($('confirmModal').hidden) return;
     $('confirmModal').hidden = true;
-    const action = confirmAction;
+    const action = confirmed ? confirmAction : cancelAction;
     confirmAction = null;
-    if (confirmed && action) action();
+    cancelAction = null;
+    if (action) action();
   }
 
   /* ---------- 配对确认 ---------- */
@@ -1469,13 +1473,8 @@
     if (name) $('linkDesc').textContent = `${name} · 打开链接或扫码就能取。`;
   }
 
-  /** 真实模式：选文件、挂链接；示例模式：走原来的假数据动画。 */
-  function startShare() {
-    if (!real) {
-      showView('link');
-      makeLink();
-      return;
-    }
+  /** 链接结果页正在生成时的空壳。 */
+  function prepareShareView() {
     state.link = '';
     $('linkMark').textContent = '…';
     $('linkTitle').textContent = '正在生成链接';
@@ -1485,7 +1484,39 @@
     $('linkExtra').hidden = true;
     $('copyLink').disabled = true;
     showView('link');
+  }
+
+  function beginSharePicker() {
+    prepareShareView();
     post({ t: 'pick-share-file' });
+  }
+
+  /** 真实模式：选文件、挂链接；示例模式：走原来的假数据动画。 */
+  function startShare() {
+    if (!real) {
+      showView('link');
+      makeLink();
+      return;
+    }
+    const paths = state.clipFiles.map((item) => item.path).filter(Boolean);
+    if (paths.length) {
+      // 文件管理器里刚复制过文件：直接问一句，用它们建链接，不再弹文件框。
+      const count = paths.length;
+      askConfirm({
+        kicker: '创建分享链接',
+        title: `用剪贴板里的 ${count} 个文件创建链接？`,
+        desc: '刚复制的文件可以直接用，不用再选一次；一条链接对应一个文件。',
+        okText: '直接创建',
+        cancelText: '选择其他文件',
+        onOk: () => {
+          prepareShareView();
+          post({ t: 'share-clipboard-files', paths });
+        },
+        onCancel: beginSharePicker,
+      });
+      return;
+    }
+    beginSharePicker();
   }
 
   function makeLink() {
@@ -2123,7 +2154,7 @@
         const send = el('button');
         send.append(
           el('span', null, '发送给设备…'),
-          el('span', 'sub', isConnected() ? '选文件后连设备' : '先配对'),
+          el('span', 'sub', isConnected() ? '可多选，选文件后发送' : '可多选，先配对'),
         );
         send.disabled = !isConnected();
         send.addEventListener('click', () => {
