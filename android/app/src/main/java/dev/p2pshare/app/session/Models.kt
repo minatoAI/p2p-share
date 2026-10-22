@@ -106,12 +106,25 @@ data class AppState(
     val logs: List<String> = emptyList(),
 ) {
     fun displayName(peerId: String): String {
-        val base = presenceNames[peerId]
-            ?: contacts.firstOrNull { it.peerId == peerId }?.peerName
-            ?: return peerId.take(6)
+        val contact = contacts.firstOrNull { it.peerId == peerId }
+        val raw = presenceNames[peerId] ?: contact?.peerName ?: return peerId.take(6)
+        // 列表前面已经有平台图标了，名字再带「Windows / Android」就是重复。
+        // 只剥掉开头这一层，用户自己起的名字保留。
+        val base = stripPlatformPrefix(raw)
         // 旧版本可能留下多条同名设备；名字相同的时候补一小段设备号，
         // 至少让人能在列表里分清点的是哪一台。
-        val duplicate = contacts.count { it.peerName == base } > 1
+        val duplicate = contacts.count { stripPlatformPrefix(it.peerName) == base } > 1
         return if (duplicate && !base.endsWith(peerId.take(6))) "$base · ${peerId.take(6)}" else base
+    }
+
+    private fun stripPlatformPrefix(name: String): String {
+        val prefixes = listOf("Windows · ", "Windows ", "Android · ", "Android ", "安卓 · ", "安卓 ")
+        for (prefix in prefixes) {
+            if (name.startsWith(prefix, ignoreCase = true)) {
+                val rest = name.substring(prefix.length).trimStart('·', ' ')
+                if (rest.isNotEmpty()) return rest
+            }
+        }
+        return name
     }
 }

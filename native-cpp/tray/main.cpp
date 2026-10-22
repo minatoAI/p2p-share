@@ -86,6 +86,7 @@ constexpr UINT kPairAsk = WM_APP + 6;
 constexpr UINT kPairAskTimeout = WM_APP + 7;
 /** 输码方也要看到六位核对码：只叫出小窗，不阻塞等按钮 */
 constexpr UINT kPairShow = WM_APP + 13;
+constexpr UINT kTipEvent = WM_APP + 14;
 constexpr UINT_PTR kWatchTimer = 1;
 constexpr UINT_PTR kShotTimer = 2;
 constexpr UINT_PTR kDumpWindows = 7;
@@ -127,6 +128,20 @@ HICON g_icon_badge = nullptr;
 HICON g_anim[16] = {};
 int g_anim_index = 0;
 bool g_busy = false;
+/** 托盘悬停文字：最近一条传输的进度。会话线程写，界面线程取。 */
+struct TipProgress {
+    std::string id;
+    std::string name;
+    bool incoming = false;
+    uint64_t done = 0;
+    uint64_t total = 0;
+    uint64_t last_done = 0;
+    std::chrono::steady_clock::time_point at{};
+    double speed = 0;
+};
+std::mutex g_tip_mutex;
+TipProgress g_tip_progress;
+std::wstring g_tip_text;
 ULONGLONG g_last_left_click = 0;
 /** 最近一次自动收起的时间：点托盘时窗口可能先失焦收起，再用它判断这次点击是"关" */
 ULONGLONG g_hidden_at = 0;
@@ -933,14 +948,81 @@ bool write_clipboard_files(const std::vector<fs::path>& files) {
 // ---- 托盘 ----
 
 std::wstring tray_tip() {
+    if (g_busy) {
+        std::lock_guard<std::mutex> lock(g_tip_mutex);
+        if (!g_tip_text.empty()) return g_tip_text;
+        return L"在线互传 · 正在传输";
+    }
     if (g_state.save_path.empty()) return L"请单击设置保存路径";
     if (IsWindowVisible(g_popup)) return L"在线互传 · 单击收起";
     return L"在线互传 · 单击查看";
 }
 
+/**
+ * 会话线程收到 progress 时更新悬停文字。
+ *
+ * 这里不直接调 Shell_NotifyIcon：那个 API 和 g_tray 的状态都属于界面线程，
+ * 所以只算好字符串，再 PostMessage 让界面线程去改。速度用约 0.5 秒的窗口算，
+ * 避免每个分片都抖一下。
+ */
+void update_transfer_tip(const nlohmann::json& message) {
+    const std::string id = message.value("id", "");
+    const std::string name = message.value("name", "");
+    const bool incoming = message.value("incoming", false);
+    const uint64_t done = message.value("done", 0ULL);
+    const uint64_t total = message.value("total", 0ULL);
+    const auto now = std::chrono::steady_clock::now();
+
+    std::lock_guard<std::mutex> lock(g_tip_mutex);
+    if (id != g_tip_progress.id || done < g_tip_progress.done) {
+        g_tip_progress = TipProgress{};
+        g_tip_progress.id = id;
+        g_tip_progress.name = name;
+        g_tip_progress.incoming = incoming;
+        g_tip_progress.last_done = done;
+        g_tip_progress.at = now;
+    } else {
+        const double seconds =
+            std::chrono::duration<double>(now - g_tip_progress.at).count();
+        if (seconds >= 0.5 && done >= g_tip_progress.last_done) {
+            g_tip_progress.speed =
+                static_cast<double>(done - g_tip_progress.last_done) / seconds;
+            g_tip_progress.at = now;
+            g_tip_progress.last_done = done;
+        }
+    }
+    g_tip_progress.name = name.empty() ? g_tip_progress.name : name;
+    g_tip_progress.incoming = incoming;
+    g_tip_progress.done = done;
+    g_tip_progress.total = total;
+
+    std::wstring shown = utf8_to_utf16(
+        g_tip_progress.name.empty() ? "文件" : g_tip_progress.name);
+    // 系统托盘提示最多 120 个字符；文件名先截断，别把后面的速度挤掉。
+    if (shown.size() > 48) shown = shown.substr(0, 45) + L"…";
+    const std::wstring verb = incoming ? L"正在接收：" : L"正在发送：";
+    if (total > 0 && done >= total) {
+        g_tip_text = (incoming ? L"接收完成：" : L"发送完成：") + shown;
+    } else {
+        std::wstring text = verb + shown;
+        if (total > 0) text += L" · " + std::to_wstring(done * 100 / total) + L"%";
+        if (g_tip_progress.speed > 0) {
+            text += L" · " + utf8_to_utf16(human_size(
+                static_cast<std::uintmax_t>(g_tip_progress.speed))) + L"/s";
+        }
+        g_tip_text = std::move(text);
+    }
+    if (g_msg) PostMessageW(g_msg, kTipEvent, 0, 0);
+}
+
 void set_busy(bool busy) {
     if (busy == g_busy) return;
     g_busy = busy;
+    {
+        std::lock_guard<std::mutex> lock(g_tip_mutex);
+        g_tip_progress = TipProgress{};
+        g_tip_text.clear();
+    }
     if (!g_tray.installed()) return;
     if (busy) {
         g_anim_index = 0;
@@ -1003,6 +1085,13 @@ void force_foreground(HWND hwnd) {
 }
 
 void post_to_page(const std::string& json) {
+    // 传输进度顺手更新托盘悬停文字；页面还没就绪也要更新，用户可能正悬停着。
+    try {
+        const auto event = nlohmann::json::parse(json);
+        if (event.value("t", "") == "progress") update_transfer_tip(event);
+    } catch (const std::exception&) {
+        // 不是 JSON 的事件照常往下传，不要因为解析失败丢掉界面消息
+    }
     // 页面还没建/还没就绪时先存着。启动阶段会话线程会先发 contacts、state，
     // 那时 webview 可能还不存在；直接丢掉会让设备菜单一直是空的。
     if (!g_webview || !g_page_ready) {
@@ -1354,28 +1443,30 @@ void pick_and_send(bool link) {
     send_files_to_page(files, link ? "link" : "send");
 }
 
-/** 选一个文件挂成公开链接。一次只挂一个：链接背后就是一个文件。 */
+/** 选文件挂成公开链接。一条链接对应一个文件，多选就挂多条。 */
 void pick_and_share() {
-    std::string picked;
+    std::vector<fs::path> files;
     if (!g_share_file_override.empty()) {
-        picked = g_share_file_override;
+        files.push_back(fs::u8path(g_share_file_override));
     } else {
         g_in_dialog = true;
-        const auto files = expand_send_paths(shell::pick_files(g_popup));
+        files = expand_send_paths(shell::pick_files(g_popup));
         g_in_dialog = false;
         if (IsWindowVisible(g_popup)) force_foreground(g_popup);
         if (files.empty()) {
             post_to_page(nlohmann::json{{"t", "share-cancelled"}}.dump());
             return;
         }
-        picked = files.front().u8string();
     }
     if (!g_session) {
         post_to_page(nlohmann::json{{"t", "toast"}, {"text", "会话还没起来，稍后再试"}}.dump());
         return;
     }
-    g_session->share_file(picked);
-    log_line("[会话] 创建分享链接：" + picked);
+    for (const auto& file : files) {
+        const std::string picked = file.u8string();
+        g_session->share_file(picked);
+        log_line("[会话] 创建分享链接：" + picked);
+    }
 }
 
 // ---- 右键菜单 ----
@@ -2029,6 +2120,16 @@ LRESULT CALLBACK msg_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
                 DWORD pid = 0;
                 if (foreground) GetWindowThreadProcessId(foreground, &pid);
                 if (foreground && pid != GetCurrentProcessId()) hide_popup();
+                return 0;
+            }
+            if (wparam == kTipEvent) {
+                std::wstring tip;
+                {
+                    std::lock_guard<std::mutex> lock(g_tip_mutex);
+                    tip = g_tip_text;
+                }
+                if (tip.empty()) tip = tray_tip();
+                if (g_tray.installed()) g_tray.set_tip(tip);
                 return 0;
             }
             if (wparam == kAnimTimer) {
