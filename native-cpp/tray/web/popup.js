@@ -1489,7 +1489,8 @@
   }
 
   function makeLink() {
-    const token = Math.random().toString(16).slice(2).padEnd(32, '0').slice(0, 32);
+    let token = '';
+    for (let i = 0; i < 32; i++) token += Math.floor(Math.random() * 16).toString(16);
     const url = `https://p2p-share-web.pages.dev/#s=${token}`;
     const finish = () => {
       showLinkResult(url, state.picked ? state.picked.items[0].name : '');
