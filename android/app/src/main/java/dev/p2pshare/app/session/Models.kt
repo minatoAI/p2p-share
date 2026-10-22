@@ -117,14 +117,16 @@ data class AppState(
         return if (duplicate && !base.endsWith(peerId.take(6))) "$base · ${peerId.take(6)}" else base
     }
 
-    private fun stripPlatformPrefix(name: String): String {
-        val prefixes = listOf("Windows · ", "Windows ", "Android · ", "Android ", "安卓 · ", "安卓 ")
-        for (prefix in prefixes) {
-            if (name.startsWith(prefix, ignoreCase = true)) {
-                val rest = name.substring(prefix.length).trimStart('·', ' ')
-                if (rest.isNotEmpty()) return rest
-            }
+}
+
+/** 列表/配对弹窗前面已经有平台图标了，名字开头再带平台名会重复。 */
+fun stripPlatformPrefix(name: String): String {
+    val prefixes = listOf("Windows · ", "Windows ", "Android · ", "Android ", "安卓 · ", "安卓 ")
+    for (prefix in prefixes) {
+        if (name.startsWith(prefix, ignoreCase = true)) {
+            val rest = name.substring(prefix.length).trimStart('·', ' ')
+            if (rest.isNotEmpty()) return rest
         }
-        return name
     }
+    return name
 }

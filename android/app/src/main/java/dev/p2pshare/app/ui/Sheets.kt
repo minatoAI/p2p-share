@@ -102,6 +102,7 @@ import dev.p2pshare.app.core.Pairing
 import dev.p2pshare.app.core.SignalLinkState
 import dev.p2pshare.app.data.exportDiagnostics
 import dev.p2pshare.app.session.AppState
+import dev.p2pshare.app.session.stripPlatformPrefix
 import dev.p2pshare.app.session.PairingRole
 import dev.p2pshare.app.session.PairingUi
 import kotlinx.coroutines.delay
@@ -888,7 +889,7 @@ fun PairingDialog(
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    text = pairing.peerName,
+                    text = stripPlatformPrefix(pairing.peerName),
                     style = MaterialTheme.typography.labelMedium,
                     color = scheme.onSurfaceVariant,
                 )
