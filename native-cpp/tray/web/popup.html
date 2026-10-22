@@ -118,6 +118,10 @@
             <div class="link-text" id="linkText"></div>
             <button class="btn tiny" id="copyLink">复制</button>
           </div>
+          <div class="link-extra" id="linkExtra" hidden>
+            <canvas class="link-qr" id="linkQr" width="220" height="220"></canvas>
+            <div class="link-code" id="linkCode"></div>
+          </div>
         </div>
         <div class="view-ft">
           <button class="btn ghost wide" id="linkDone">完成</button>
@@ -210,7 +214,6 @@
           <div class="field-label">已配对设备</div>
           <div class="contact-list" id="contactList"></div>
 
-          <button class="btn ghost wide" id="setOpenFull">打开完整界面</button>
         </div>
       </main>
 

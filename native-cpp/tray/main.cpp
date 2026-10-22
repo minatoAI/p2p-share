@@ -100,7 +100,6 @@ constexpr int kPopupWidthDip = 384;
 constexpr int kPopupHeightDip = 520;
 
 enum MenuId : UINT {
-    kMenuSettings = 1000,
     kMenuSend = 1001,
     kMenuLink,
     kMenuSync,
@@ -108,7 +107,6 @@ enum MenuId : UINT {
     kMenuSendTo,
     kMenuAutoSync,
     kMenuAutostart,
-    kMenuOpenUi,
     kMenuExit,
     /** 排在最后：这些编号不落盘，新加的别插在中间，免得和旧的心理顺序对不上 */
     kMenuCopyReceived,
@@ -1043,13 +1041,6 @@ void refresh_tray_icon() {
     g_tray.set_tip(tray_tip());
 }
 
-/** 打开网页端：设置、历史这些放浏览器里。 */
-void open_settings() {
-    std::string url = proto::server_url();
-    if (url.empty()) url = "https://p2p-share-web.pages.dev/";
-    ShellExecuteW(nullptr, L"open", utf8_to_utf16(url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-}
-
 fs::path find_ui_dir() {
     if (const wchar_t* override = _wgetenv(L"P2P_UI_DIR")) {
         fs::path dir(override);
@@ -1478,9 +1469,7 @@ std::wstring shorten_path(const std::wstring& path, size_t limit) {
 
 HMENU build_menu() {
     HMENU menu = CreatePopupMenu();
-    // 常用动作都搬到小窗里了，右键只留设置类的项
-    AppendMenuW(menu, MF_STRING, kMenuSettings, L"设置…");
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    // 常用动作都搬到小窗里了，右键只留保存/启动这类系统项。
     AppendMenuW(menu, MF_STRING, kMenuSavePath, L"保存位置…");
     const std::wstring current =
         g_state.save_path.empty() ? L"　　尚未设置"
@@ -1495,17 +1484,12 @@ HMENU build_menu() {
     AppendMenuW(menu, MF_STRING | (autostart_enabled() ? MF_CHECKED : 0), kMenuAutostart,
                 L"开机自启");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, kMenuOpenUi, L"打开完整界面");
     AppendMenuW(menu, MF_STRING, kMenuExit, L"退出");
     return menu;
 }
 
 void handle_menu(UINT command) {
     switch (command) {
-        case kMenuSettings:
-            post_to_page(nlohmann::json{{"t", "open-settings"}}.dump());
-            show_popup();
-            break;
         case kMenuSavePath:
             choose_save_path();
             break;
@@ -1531,9 +1515,6 @@ void handle_menu(UINT command) {
             }
             break;
         }
-        case kMenuOpenUi:
-            open_settings();
-            break;
         case kMenuAutoSync:
             g_settings.auto_sync_clipboard = !g_settings.auto_sync_clipboard;
             if (g_settings.auto_sync_clipboard) {
@@ -1874,10 +1855,6 @@ void on_page_message(const std::string& json) {
                              .dump());
         }
         post_to_page(state_message().dump());
-        return;
-    }
-    if (type == "open-full-ui") {
-        open_settings();
         return;
     }
     if (type == "open-save-dialog") {

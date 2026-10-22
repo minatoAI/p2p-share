@@ -1267,6 +1267,28 @@ body.dragging {
   user-select: text;
 }
 
+.link-extra {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.link-qr {
+  width: 168px;
+  height: 168px;
+  padding: 7px;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.link-code {
+  color: var(--muted);
+  font: 12px/1.4 ui-monospace, Consolas, monospace;
+  letter-spacing: 0.04em;
+}
+
 /* ---------- 添加设备 ---------- */
 
 .pair-body {

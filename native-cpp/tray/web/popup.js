@@ -222,7 +222,18 @@
 
   function renderHeader() {
     if (real) {
-      $('deviceName').textContent = state.peerName || state.deviceName || '这台电脑';
+      const devices = knownDevices();
+      const selected = state.peerName || (devices.length ? currentDevice().name : '');
+      if (!selected) {
+        // 没配对设备时这里以前会退回自己的设备名，看起来像"要发给自己"。
+        // 明确指向右侧的加号，不要显示本机名字。
+        $('deviceName').textContent = '未添加设备';
+        $('deviceState').textContent = '点右侧 ＋ 添加';
+        $('deviceDot').classList.add('off');
+        updateSendButton();
+        return;
+      }
+      $('deviceName').textContent = selected;
       // X-2：头栏主状态只用这五个词。连灯塔、建连这类过渡态不当主状态，
       // 进度说明留在 title/detail 里，避免同一个状态在三端三种说法。
       const labels = {
@@ -470,6 +481,9 @@
   }
 
   function applyProgress(message) {
+    // 分享链接的访客进度归「我分享的链接」，不要混进「直接传输」，
+    // 否则网页端扫码取件时这里会挂到上一次配对的安卓设备名下。
+    if (message.share) return;
     const total = message.total || 0;
     const pct = total ? Math.max(1, Math.min(100, Math.round((message.done / total) * 100))) : 0;
     // 已经收尾的那条（完成/取消/失败）再来一条晚到的进度，不能另起一行。
@@ -1016,7 +1030,7 @@
     openMenuAt($('deviceBtn'), (menu) => {
       const devices = real ? knownDevices() : state.devices;
       if (real && !devices.length) {
-        const empty = el('div', 'empty', '还没有配对过的设备');
+        const empty = el('div', 'empty', '还没有配对过的设备。点右上角 ＋ 添加。');
         menu.append(empty);
       }
       for (const device of devices) {
@@ -1291,7 +1305,7 @@
         button.append(
           el('span', 'radio'),
           el('span', 'target-name', '还没有配对设备'),
-          el('span', 'target-sub', '先配对再发送'),
+          el('span', 'target-sub', '点右上角 ＋ 添加'),
         );
         button.addEventListener('click', () => {
           state.pendingSend = Boolean(state.picked);
@@ -1437,6 +1451,24 @@
     return `${Math.max(1, Math.ceil(left / 60000))} 分钟内有效`;
   }
 
+  /** 链接结果页统一入口：链接、编号、二维码一起摆出来，不再只显示一条链接。 */
+  function showLinkResult(link, name) {
+    state.link = link || '';
+    $('linkText').textContent = state.link;
+    $('copyLink').disabled = !state.link;
+    const match = /#s=([0-9a-f]{32})/i.exec(state.link);
+    const code = match ? match[1].slice(-8) : '';
+    const extra = $('linkExtra');
+    if (code && drawQrTo($('linkQr'), state.link)) {
+      $('linkCode').textContent = `编号 ${code}`;
+      extra.hidden = false;
+    } else {
+      $('linkCode').textContent = '';
+      extra.hidden = true;
+    }
+    if (name) $('linkDesc').textContent = `${name} · 打开链接或扫码就能取。`;
+  }
+
   /** 真实模式：选文件、挂链接；示例模式：走原来的假数据动画。 */
   function startShare() {
     if (!real) {
@@ -1449,20 +1481,21 @@
     $('linkTitle').textContent = '正在生成链接';
     $('linkDesc').textContent = '选好文件后，把链接发给对方就能取。';
     $('linkText').textContent = '';
+    $('linkCode').textContent = '';
+    $('linkExtra').hidden = true;
     $('copyLink').disabled = true;
     showView('link');
     post({ t: 'pick-share-file' });
   }
 
   function makeLink() {
-    const url = `https://p2p-share-web.pages.dev/s/${Math.random().toString(36).slice(2, 10)}`;
+    const token = Math.random().toString(16).slice(2).padEnd(32, '0').slice(0, 32);
+    const url = `https://p2p-share-web.pages.dev/#s=${token}`;
     const finish = () => {
-      state.link = url;
-      $('linkText').textContent = url;
+      showLinkResult(url, state.picked ? state.picked.items[0].name : '');
       $('linkMark').textContent = '✓';
       $('linkTitle').textContent = '链接已复制';
       $('linkDesc').textContent = '发给对方，打开就能取到这份文件。';
-      $('copyLink').disabled = false;
       post({ t: 'copy', text: url });
       if (state.picked) {
         state.shares.unshift({
@@ -1484,6 +1517,8 @@
     $('linkTitle').textContent = '正在生成链接';
     $('linkDesc').textContent = '把文件放上去，马上就好。';
     $('linkText').textContent = '';
+    $('linkCode').textContent = '';
+    $('linkExtra').hidden = true;
     $('copyLink').disabled = true;
     setTimeout(finish, 700);
   }
@@ -1867,12 +1902,9 @@
         break;
       }
       case 'share-created': {
-        state.link = message.link || '';
+        showLinkResult(message.link || '', message.name || '');
         $('linkMark').textContent = '✓';
         $('linkTitle').textContent = '链接已复制';
-        $('linkDesc').textContent = `${message.name || '文件'} · 打开链接就能取。`;
-        $('linkText').textContent = state.link;
-        $('copyLink').disabled = !state.link;
         if (state.link) post({ t: 'copy', text: state.link });
         break;
       }
@@ -2057,7 +2089,6 @@
     $('setDeviceName').addEventListener('keydown', (event) => {
       if (event.key === 'Enter') saveDeviceName();
     });
-    $('setOpenFull').addEventListener('click', () => post({ t: 'open-full-ui' }));
     $('collapseBtn').addEventListener('click', () => post({ t: 'close' }));
     for (const tab of document.querySelectorAll('.tab')) {
       tab.addEventListener('click', () => setTab(tab.dataset.tab));
