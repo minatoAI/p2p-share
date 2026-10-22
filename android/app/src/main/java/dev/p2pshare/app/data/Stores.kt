@@ -2,12 +2,14 @@ package dev.p2pshare.app.data
 
 import android.content.Context
 import android.os.Build
+import android.provider.Settings
 import dev.p2pshare.app.core.Direction
 import dev.p2pshare.app.core.PLATFORM_WEB
 import dev.p2pshare.app.core.PublicKeyJwk
 import dev.p2pshare.app.core.TransferStatus
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import java.security.MessageDigest
 
 @Serializable
 data class ContactRecord(
@@ -126,7 +128,8 @@ class ContactStore(context: Context) {
 }
 
 class SettingsStore(context: Context) {
-    private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private val appContext = context.applicationContext
+    private val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     var deviceName: String
         get() = prefs.getString(KEY_NAME, null)?.takeIf { it.isNotBlank() } ?: defaultName()
@@ -154,9 +157,30 @@ class SettingsStore(context: Context) {
             return (if (cut >= 0) base.substring(0, cut) else base).trimEnd('/')
         }
 
+    /**
+     * 两台同型号手机不该显示成同一个名字。型号给人看，末尾四位设备摘要给机器看：
+     * 摘要来自 ANDROID_ID，同一台手机稳定，不同手机不会重复；用户自己改过名字则不再用默认值。
+     */
     private fun defaultName(): String {
+        val maker = Build.MANUFACTURER?.trim().orEmpty()
         val model = Build.MODEL?.trim().orEmpty()
-        return model.ifEmpty { "我的手机" }
+        val label = when {
+            model.isEmpty() -> "安卓设备"
+            maker.isEmpty() || model.startsWith(maker, ignoreCase = true) -> model
+            else -> "$maker $model"
+        }
+        return "$label · ${deviceTag()}"
+    }
+
+    private fun deviceTag(): String {
+        val androidId = runCatching {
+            Settings.Secure.getString(appContext.contentResolver, Settings.Secure.ANDROID_ID)
+        }.getOrNull().orEmpty()
+        val source = androidId.ifBlank {
+            Build.FINGERPRINT + Build.DEVICE + Build.MODEL
+        }
+        val digest = MessageDigest.getInstance("SHA-256").digest(source.toByteArray())
+        return digest.take(2).joinToString("") { "%02X".format(it.toInt() and 0xFF) }
     }
 
     companion object {

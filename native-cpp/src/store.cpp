@@ -3,8 +3,10 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cstdio>
 #include <fstream>
 #include <cstdlib>
+#include <iterator>
 #include <stdexcept>
 #include <system_error>
 
@@ -62,6 +64,35 @@ std::filesystem::path default_save_dir() {
 #endif
 }
 
+std::string default_device_name() {
+#ifdef _WIN32
+    wchar_t host[256] = {};
+    DWORD host_len = static_cast<DWORD>(std::size(host));
+    std::string machine;
+    if (GetComputerNameW(host, &host_len)) {
+        const int need = WideCharToMultiByte(CP_UTF8, 0, host, static_cast<int>(host_len),
+                                             nullptr, 0, nullptr, nullptr);
+        if (need > 0) {
+            machine.resize(static_cast<size_t>(need));
+            WideCharToMultiByte(CP_UTF8, 0, host, static_cast<int>(host_len), machine.data(),
+                                need, nullptr, nullptr);
+        }
+    }
+    // 同一台机器上不同数据目录（比如新旧版本并排安装）也应该能区分。
+    uint32_t hash = 2166136261u;
+    for (const unsigned char ch : default_app_dir().u8string()) {
+        hash ^= ch;
+        hash *= 16777619u;
+    }
+    char tag[8] = {};
+    std::snprintf(tag, sizeof(tag), "%04X", static_cast<unsigned>(hash & 0xFFFFu));
+    if (machine.empty()) return std::string("Windows · ") + tag;
+    return "Windows · " + machine + " · " + tag;
+#else
+    return "Windows";
+#endif
+}
+
 Settings load_settings(const std::filesystem::path& dir) {
     Settings out;
     out.save_dir = default_save_dir().u8string();
@@ -79,6 +110,8 @@ Settings load_settings(const std::filesystem::path& dir) {
         return out;
     }
     out.device_name = node.value("deviceName", out.device_name);
+    // 旧默认名没有辨识度，迁移到机器名+短后缀；用户自己改过的名字保留。
+    if (out.device_name == "我的 Windows") out.device_name = default_device_name();
     out.save_dir = node.value("saveDir", out.save_dir);
     out.lighthouse = node.value("lighthouse", out.lighthouse);
     out.auto_accept_paired = node.value("autoAcceptPaired", out.auto_accept_paired);

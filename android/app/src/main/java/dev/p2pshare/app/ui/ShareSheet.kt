@@ -25,6 +25,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.OpenInNew
+import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -86,6 +87,7 @@ fun ShareSheet(
     var copiedToken by remember { mutableStateOf<String?>(null) }
     // 撤销不可逆，先确认一次；点「返回」不会动链接
     var pendingRevoke by remember { mutableStateOf<ShareUi?>(null) }
+    var qrShare by remember { mutableStateOf<ShareUi?>(null) }
 
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
@@ -196,6 +198,7 @@ fun ShareSheet(
                                     clipboard.setText(AnnotatedString(shareCode(share.token)))
                                     copiedToken = "${share.token}|code"
                                 },
+                                onQr = { qrShare = share },
                                 onSend = {
                                     val send = Intent(Intent.ACTION_SEND).apply {
                                         type = "text/plain"
@@ -275,6 +278,43 @@ fun ShareSheet(
             },
         )
     }
+
+    qrShare?.let { share ->
+        AlertDialog(
+            onDismissRequest = { qrShare = null },
+            title = { Text("扫码取「${share.name}」") },
+            text = {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    QrCode(content = share.link, size = 220.dp, description = "分享二维码")
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "编号 ${shareCode(share.token)}",
+                        style = MaterialTheme.typography.titleMedium.copy(fontFamily = MonoDigits),
+                        color = scheme.primary,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "对方扫码直接打开；也可以复制编号后在我取件里输入。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = scheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        clipboard.setText(AnnotatedString(share.link))
+                        qrShare = null
+                    },
+                ) {
+                    Text("复制链接")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { qrShare = null }) { Text("关闭") }
+            },
+        )
+    }
 }
 
 @Composable
@@ -301,6 +341,7 @@ private fun ShareCard(
     copiedCode: Boolean,
     onCopyLink: () -> Unit,
     onCopyCode: () -> Unit,
+    onQr: () -> Unit,
     onSend: () -> Unit,
     onRevoke: () -> Unit,
 ) {
@@ -366,14 +407,25 @@ private fun ShareCard(
                 }
             }
             Spacer(Modifier.height(8.dp))
-            OutlinedButton(onClick = onSend, modifier = Modifier.height(38.dp)) {
-                Icon(
-                    imageVector = Icons.Rounded.OpenInNew,
-                    contentDescription = null,
-                    modifier = Modifier.size(15.dp),
-                )
-                Spacer(Modifier.width(5.dp))
-                Text("发出去")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onQr, modifier = Modifier.height(38.dp)) {
+                    Icon(
+                        imageVector = Icons.Rounded.QrCode2,
+                        contentDescription = null,
+                        modifier = Modifier.size(15.dp),
+                    )
+                    Spacer(Modifier.width(5.dp))
+                    Text("二维码")
+                }
+                OutlinedButton(onClick = onSend, modifier = Modifier.height(38.dp)) {
+                    Icon(
+                        imageVector = Icons.Rounded.OpenInNew,
+                        contentDescription = null,
+                        modifier = Modifier.size(15.dp),
+                    )
+                    Spacer(Modifier.width(5.dp))
+                    Text("发出去")
+                }
             }
             if (share.visitors.isNotEmpty()) {
                 Spacer(Modifier.height(8.dp))

@@ -730,6 +730,22 @@ body.dragging {
   white-space: nowrap;
 }
 
+.modal-qr {
+  width: 220px;
+  height: 220px;
+  align-self: center;
+  border-radius: 12px;
+  background: #fff;
+  padding: 8px;
+}
+
+.modal-qr-code {
+  align-self: center;
+  color: var(--muted);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 13px;
+}
+
 .modal-actions .btn.primary {
   flex-basis: 100%;
 }

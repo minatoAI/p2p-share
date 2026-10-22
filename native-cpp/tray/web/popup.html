@@ -242,6 +242,20 @@
       </div>
     </div>
 
+    <div class="modal" id="shareQrModal" hidden>
+      <div class="modal-card">
+        <div class="modal-kicker">分享二维码</div>
+        <div class="modal-title" id="shareQrName">分享链接</div>
+        <canvas class="modal-qr" id="shareQrCanvas" width="240" height="240"></canvas>
+        <div class="modal-qr-code" id="shareQrCode"></div>
+        <p class="modal-desc">对方扫码直接打开；也可以复制链接或编号发过去。</p>
+        <div class="modal-actions">
+          <button class="btn ghost" id="shareQrClose">关闭</button>
+          <button class="btn primary" id="shareQrCopy">复制链接</button>
+        </div>
+      </div>
+    </div>
+
     <div class="modal" id="fileModal" hidden>
       <div class="modal-card">
         <div class="modal-kicker">文件操作</div>

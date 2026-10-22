@@ -2,6 +2,8 @@ package dev.p2pshare.app.ui.theme
 
 import android.app.Activity
 import android.content.Context
+import android.graphics.drawable.ColorDrawable
+import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
@@ -103,6 +105,16 @@ fun P2PShareTheme(
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as Activity).window
+            // enableEdgeToEdge 把两条系统栏设成透明，露出来的是 windowBackground。
+            // 只改图标明暗不够：窗口底色还是纯白/纯黑，和下面的 Paper/NightPaper 不是同一个色。
+            window.statusBarColor = colors.background.toArgb()
+            window.navigationBarColor = colors.background.toArgb()
+            window.setBackgroundDrawable(ColorDrawable(colors.background.toArgb()))
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // Android 10+ 默认会给透明系统栏加一层对比度 scrim，正好把颜色又拉回白/黑。
+                window.isStatusBarContrastEnforced = false
+                window.isNavigationBarContrastEnforced = false
+            }
             WindowCompat.getInsetsController(window, view).apply {
                 isAppearanceLightStatusBars = !darkTheme
                 isAppearanceLightNavigationBars = !darkTheme

@@ -26,13 +26,18 @@ import com.journeyapps.barcodescanner.ScanOptions
 
 /** 配对二维码与网页端同一个内容：`<origin>/#c=<code>`。 */
 @Composable
-fun QrCode(content: String?, size: Dp = 168.dp, modifier: Modifier = Modifier) {
+fun QrCode(
+    content: String?,
+    size: Dp = 168.dp,
+    modifier: Modifier = Modifier,
+    description: String = "配对二维码",
+) {
     val scheme = MaterialTheme.colorScheme
     val bitmap = remember(content) { content?.let(::encodeQr) }
     if (bitmap != null) {
         Image(
             bitmap = bitmap,
-            contentDescription = "配对二维码",
+            contentDescription = description,
             modifier = modifier
                 .size(size)
                 .clip(RoundedCornerShape(14.dp))

@@ -129,6 +129,15 @@
     return ['txt', 'png', 'jpg', 'mp4', 'zip'].includes(ext) ? ext : 'default';
   }
 
+  /** 旧版本可能留下多条同名设备；重名时补设备号，避免列表里没法选。 */
+  function contactDisplayName(item) {
+    const base = item.name || String(item.id || '').slice(0, 8);
+    const duplicate =
+      state.contacts.filter((c) => (c.name || String(c.id || '').slice(0, 8)) === base).length > 1;
+    const suffix = String(item.id || '').slice(0, 6);
+    return duplicate && suffix && !base.endsWith(suffix) ? `${base} · ${suffix}` : base;
+  }
+
   /**
    * 配对过的设备（通讯录）加上灯塔报的在线状态。
    * 重启后通讯录还在，没有 presence 也能看见这些设备并点着重连。
@@ -136,7 +145,7 @@
   function knownDevices() {
     const map = new Map();
     for (const item of state.contacts || []) {
-      map.set(item.id, { id: item.id, name: item.name || item.id.slice(0, 8), online: false });
+      map.set(item.id, { id: item.id, name: contactDisplayName(item), online: false });
     }
     for (const item of state.presence || []) {
       if (map.has(item.id)) {
@@ -519,17 +528,9 @@
     renderPairQr();
   }
 
-  /** 把配对链接画成二维码。code 有、link 还没到时退化成只编码六位数字。 */
-  function renderPairQr() {
-    const box = $('pairQrBox');
-    const canvas = $('pairQr');
-    const copy = $('copyPairLink');
-    const payload = state.pairLink || state.code;
-    if (!box || !canvas || !payload || typeof window.qrcode !== 'function') {
-      if (box) box.hidden = true;
-      if (copy) copy.hidden = true;
-      return;
-    }
+  /** 把任意内容画到 canvas 上；二维码库没加载或内容为空时返回 false。 */
+  function drawQrTo(canvas, payload) {
+    if (!canvas || !payload || typeof window.qrcode !== 'function') return false;
     try {
       const qr = window.qrcode(0, 'M');
       qr.addData(payload);
@@ -549,12 +550,40 @@
           ctx.fillRect(x, y, Math.round((col + 1) * cell) - x, Math.round((row + 1) * cell) - y);
         }
       }
-      box.hidden = false;
-      if (copy) copy.hidden = !state.pairLink;
+      return true;
     } catch {
-      box.hidden = true;
-      if (copy) copy.hidden = true;
+      return false;
     }
+  }
+
+  /** 把配对链接画成二维码。code 有、link 还没到时退化成只编码六位数字。 */
+  function renderPairQr() {
+    const box = $('pairQrBox');
+    const canvas = $('pairQr');
+    const copy = $('copyPairLink');
+    const payload = state.pairLink || state.code;
+    if (!box || !canvas || !payload || !drawQrTo(canvas, payload)) {
+      if (box) box.hidden = true;
+      if (copy) copy.hidden = true;
+      return;
+    }
+    box.hidden = false;
+    if (copy) copy.hidden = !state.pairLink;
+  }
+
+  /** 分享条目的二维码：内容必须是那条 #s= 链接，不能退回站点首页。 */
+  function showShareQr(share) {
+    closeMenu();
+    if (!share) return;
+    state.shareQr = share;
+    $('shareQrName').textContent = share.name || '分享链接';
+    const shareCode = String(share.token || '').slice(-8);
+    $('shareQrCode').textContent = shareCode ? `编号 ${shareCode}` : '';
+    if (!drawQrTo($('shareQrCanvas'), share.link)) {
+      toast('二维码生成失败');
+      return;
+    }
+    $('shareQrModal').hidden = false;
   }
 
   // ---------- 扫码 ----------
@@ -717,6 +746,9 @@
 
   function openShareMenu(share, anchor) {
     openMenuAt(anchor, (menu) => {
+      const qr = el('button');
+      qr.textContent = '显示二维码';
+      qr.addEventListener('click', () => showShareQr(share));
       const copy = el('button');
       copy.textContent = '复制链接';
       copy.addEventListener('click', () => {
@@ -748,7 +780,7 @@
           },
         });
       });
-      menu.append(copy, stop);
+      menu.append(qr, copy, stop);
     });
   }
 
@@ -864,7 +896,7 @@
     }
     for (const contact of state.contacts) {
       const row = el('div', 'contact-row');
-      const name = el('button', 'contact-name', contact.name || contact.id.slice(0, 8));
+      const name = el('button', 'contact-name', contactDisplayName(contact));
       name.title = '点一下改名';
       name.addEventListener('click', () => beginRename(row, contact));
       const remove = el('button', 'contact-del', '删除');
@@ -2190,6 +2222,22 @@
     $('pairReject').addEventListener('click', () => closePairAsk(false));
     $('pairModal').addEventListener('click', (event) => {
       if (event.target === $('pairModal')) closePairAsk(false);
+    });
+    $('shareQrClose').addEventListener('click', () => {
+      $('shareQrModal').hidden = true;
+      state.shareQr = null;
+    });
+    $('shareQrCopy').addEventListener('click', () => {
+      const share = state.shareQr;
+      if (share && share.link) {
+        post({ t: 'copy', text: share.link });
+        toast('链接已复制');
+      }
+    });
+    $('shareQrModal').addEventListener('click', (event) => {
+      if (event.target !== $('shareQrModal')) return;
+      $('shareQrModal').hidden = true;
+      state.shareQr = null;
     });
     $('fileOpen').addEventListener('click', () => runFileAction('open'));
     $('fileReveal').addEventListener('click', () => runFileAction('reveal'));

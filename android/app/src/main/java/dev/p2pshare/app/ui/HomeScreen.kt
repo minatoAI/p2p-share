@@ -55,7 +55,6 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -106,13 +105,7 @@ fun HomeScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    0f to scheme.primary.copy(alpha = 0.07f),
-                    0.34f to scheme.background,
-                    1f to scheme.background,
-                ),
-            )
+            .background(scheme.background)
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 22.dp),
     ) {

@@ -22,9 +22,11 @@ namespace p2p {
 std::filesystem::path default_app_dir();
 /** 下载目录下的 P2P 子目录，作为默认保存位置 */
 std::filesystem::path default_save_dir();
+/** 默认设备名：带机器名和稳定短后缀，避免多台机器都叫「我的 Windows」 */
+std::string default_device_name();
 
 struct Settings {
-    std::string device_name = "我的 Windows";
+    std::string device_name = default_device_name();
     std::string save_dir;
     /** 线上灯塔；本地 wrangler 联调时在 settings.json 里覆盖 */
     std::string lighthouse = "wss://p2p-share-web.pages.dev/ws/presence";

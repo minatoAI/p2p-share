@@ -105,8 +105,13 @@ data class AppState(
     val error: UiError? = null,
     val logs: List<String> = emptyList(),
 ) {
-    fun displayName(peerId: String): String =
-        presenceNames[peerId]
+    fun displayName(peerId: String): String {
+        val base = presenceNames[peerId]
             ?: contacts.firstOrNull { it.peerId == peerId }?.peerName
-            ?: peerId.take(6)
+            ?: return peerId.take(6)
+        // 旧版本可能留下多条同名设备；名字相同的时候补一小段设备号，
+        // 至少让人能在列表里分清点的是哪一台。
+        val duplicate = contacts.count { it.peerName == base } > 1
+        return if (duplicate && !base.endsWith(peerId.take(6))) "$base · ${peerId.take(6)}" else base
+    }
 }
